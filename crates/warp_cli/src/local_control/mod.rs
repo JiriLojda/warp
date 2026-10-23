@@ -359,7 +359,10 @@ pub enum PaneCommand {
     /// Run a command in a terminal pane, queueing it if the shell is busy.
     Run(TextTargetArgs),
 
-    /// Stream a terminal pane's raw PTY output to stdout until the pane closes.
+    /// Replace a terminal pane's input line and place its cursor.
+    UpdateInput(PaneUpdateInputArgs),
+
+    /// Stream a terminal pane's PTY output and input changes to stdout as NDJSON until the pane closes.
     Stream(TargetArgs),
 }
 
@@ -754,6 +757,22 @@ pub struct PaneReadArgs {
     /// Keep colors and styles in the output as ANSI escape sequences.
     #[arg(long)]
     pub ansi: bool,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct PaneUpdateInputArgs {
+    pub text: String,
+
+    /// Cursor position in characters; defaults to the end of the text.
+    #[arg(long)]
+    pub cursor: Option<u32>,
+
+    /// Sequence number echoed back in the pane stream's input updates.
+    #[arg(long, default_value_t = 0)]
+    pub op_no: u64,
+
+    #[command(flatten)]
+    pub target: TargetArgs,
 }
 
 #[derive(Debug, Clone, Args)]

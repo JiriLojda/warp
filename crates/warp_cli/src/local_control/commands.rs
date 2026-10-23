@@ -3,9 +3,9 @@ use local_control::discovery::InstanceRecord;
 use local_control::protocol::{
     Action, ActionKind, ActionNameParams, BindingNameParams, BooleanValueParams, ColorValueParams,
     ControlError, DirectionParams, EmptyParams, ErrorCode, FileOpenParams, KeyParams,
-    KeyValueParams, PageQueryParams, PaneReadParams, QueryParams, RenameParams, RequestEnvelope,
-    ResizeParams, SettingListParams, TabActivateParams, TabActivationMode, TabCloseMode,
-    TabCloseParams, TabCreateParams, TextParams, ThemeNameParams,
+    KeyValueParams, PageQueryParams, PaneReadParams, PaneUpdateInputParams, QueryParams,
+    RenameParams, RequestEnvelope, ResizeParams, SettingListParams, TabActivateParams,
+    TabActivationMode, TabCloseMode, TabCloseParams, TabCreateParams, TextParams, ThemeNameParams,
 };
 use local_control::selection::select_instance;
 use serde::Serialize;
@@ -494,6 +494,21 @@ pub(super) fn run_pane_command(
             TextParams { text: args.text },
             output_format,
         ),
+        PaneCommand::UpdateInput(args) => {
+            let cursor = args
+                .cursor
+                .unwrap_or_else(|| args.text.chars().count() as u32);
+            run_action_with_params(
+                args.target,
+                ActionKind::PaneUpdateInput,
+                PaneUpdateInputParams {
+                    op_no: args.op_no,
+                    text: args.text,
+                    cursor,
+                },
+                output_format,
+            )
+        }
         PaneCommand::Stream(args) => run_pane_stream(args),
         PaneCommand::Run(args) => run_action_with_params(
             args.target,

@@ -1,11 +1,19 @@
 //! Terminal content and PTY input handlers for local-control actions.
+use std::collections::HashMap;
 use std::sync::Arc;
 
-use ::local_control::protocol::{PaneReadParams, TargetSelector, TextParams};
+use ::local_control::protocol::{
+    PaneInputState, PaneReadParams, PaneStreamMessage, PaneUpdateInputParams, TargetSelector,
+    TextParams,
+};
 use ::local_control::{ActionKind, ControlError, ErrorCode, InstanceId};
+use base64::Engine as _;
+use futures::stream::{self, BoxStream, StreamExt as _};
 use serde_json::json;
-use warpui::{ModelContext, ViewHandle};
+use string_offset::ByteOffset;
+use warpui::{AppContext, EntityId, ModelContext, ViewHandle};
 
+use crate::editor::Event as EditorEvent;
 use crate::local_control::LocalControlBridge;
 use crate::local_control::handlers::ack;
 use crate::local_control::handlers::app_state::validate_staged_input_text;
@@ -15,9 +23,21 @@ use crate::terminal::model::block::{Block, BlockState};
 
 const DEFAULT_MAX_BLOCKS: u32 = 20;
 const MAX_BLOCKS_LIMIT: u32 = 500;
+const INPUT_CHANNEL_CAPACITY: usize = 64;
+
+/// Per-pane fan-out of input editor changes to `pane.stream` clients.
+pub(crate) struct InputChannel {
+    tx: async_broadcast::Sender<Arc<PaneStreamMessage>>,
+    // Keeps the channel open while no stream is attached.
+    _rx: async_broadcast::InactiveReceiver<Arc<PaneStreamMessage>>,
+    applied_op_no: u64,
+}
+
+pub(crate) type InputChannels = HashMap<EntityId, InputChannel>;
 
 pub(crate) fn handle(
     instance_id: &Option<InstanceId>,
+    input_channels: &mut InputChannels,
     action: ActionKind,
     params: &serde_json::Value,
     target: &TargetSelector,
@@ -27,6 +47,9 @@ pub(crate) fn handle(
         ActionKind::PaneRead => pane_read(action, params, target, ctx),
         ActionKind::PaneWrite => pane_write(instance_id, action, params, target, ctx),
         ActionKind::PaneRun => pane_run(instance_id, action, params, target, ctx),
+        ActionKind::PaneUpdateInput => {
+            pane_update_input(instance_id, input_channels, action, params, target, ctx)
+        }
         _ => Err(ControlError::new(
             ErrorCode::UnsupportedAction,
             format!("{} is not a terminal I/O action", action.as_str()),
@@ -212,13 +235,125 @@ fn empty_text_error(action: ActionKind) -> ControlError {
     )
 }
 
+fn pane_update_input(
+    instance_id: &Option<InstanceId>,
+    input_channels: &mut InputChannels,
+    action: ActionKind,
+    params: &serde_json::Value,
+    target: &TargetSelector,
+    ctx: &mut ModelContext<LocalControlBridge>,
+) -> Result<serde_json::Value, ControlError> {
+    let PaneUpdateInputParams {
+        op_no,
+        text,
+        cursor,
+    } = decode_params(params)?;
+    validate_staged_input_text(action, &text)?;
+    let terminal_view = target_terminal_view(action, target, ctx)?;
+    // Recorded first because the editor events this edit triggers publish the op number.
+    if let Some(channel) = input_channels.get_mut(&terminal_view.id()) {
+        channel.applied_op_no = op_no;
+    }
+    let cursor_byte = byte_offset_of_char(&text, cursor as usize);
+    terminal_view.update(ctx, |terminal_view, ctx| {
+        terminal_view.input().update(ctx, |input, ctx| {
+            input.editor().update(ctx, |editor, ctx| {
+                if editor.buffer_text(ctx) != text {
+                    editor.set_buffer_text(&text, ctx);
+                }
+                editor.select_ranges_by_byte_offset(
+                    [ByteOffset::from(cursor_byte).empty_range()],
+                    ctx,
+                );
+            });
+        });
+    });
+    Ok(ack(instance_id, action))
+}
+
+fn byte_offset_of_char(text: &str, char_index: usize) -> usize {
+    text.char_indices()
+        .nth(char_index)
+        .map_or(text.len(), |(byte, _)| byte)
+}
+
+fn input_state(terminal_view: &TerminalView, op_no: u64, ctx: &AppContext) -> PaneInputState {
+    let editor = terminal_view.input().as_ref(ctx).editor().as_ref(ctx);
+    let text = editor.buffer_text(ctx);
+    let cursor_byte = editor.start_byte_index_of_first_selection(ctx).as_usize();
+    let cursor = text
+        .get(..cursor_byte)
+        .map_or(text.chars().count(), |before| before.chars().count());
+    PaneInputState {
+        buffer_id: terminal_view
+            .model
+            .lock()
+            .block_list()
+            .active_block_id()
+            .to_string(),
+        op_no,
+        text,
+        cursor: cursor as u32,
+    }
+}
+
+fn input_receiver(
+    input_channels: &mut InputChannels,
+    terminal_view: &ViewHandle<TerminalView>,
+    ctx: &mut ModelContext<LocalControlBridge>,
+) -> async_broadcast::Receiver<Arc<PaneStreamMessage>> {
+    let view_id = terminal_view.id();
+    if let Some(channel) = input_channels.get(&view_id) {
+        return channel.tx.new_receiver();
+    }
+    let (mut tx, rx) = async_broadcast::broadcast(INPUT_CHANNEL_CAPACITY);
+    tx.set_overflow(true);
+    let receiver = rx.clone();
+    input_channels.insert(
+        view_id,
+        InputChannel {
+            tx,
+            _rx: rx.deactivate(),
+            applied_op_no: 0,
+        },
+    );
+    let editor = terminal_view.read(ctx, |terminal_view, ctx| {
+        terminal_view.input().as_ref(ctx).editor().clone()
+    });
+    let weak_view = terminal_view.downgrade();
+    ctx.subscribe_to_view(&editor, move |bridge, _, event, ctx| {
+        if !matches!(
+            event,
+            EditorEvent::Edited(_) | EditorEvent::BufferReplaced | EditorEvent::SelectionChanged
+        ) {
+            return;
+        }
+        let Some(terminal_view) = weak_view.upgrade(ctx) else {
+            return;
+        };
+        let Some(channel) = bridge.input_channels().get(&view_id) else {
+            return;
+        };
+        if channel.tx.receiver_count() == 0 {
+            return;
+        }
+        let state = input_state(terminal_view.as_ref(ctx), channel.applied_op_no, ctx);
+        let _ = channel
+            .tx
+            .try_broadcast(Arc::new(PaneStreamMessage::InputUpdated(state)));
+    });
+    receiver
+}
+
+/// The target pane's PTY output and input editor changes, starting with the current input.
 pub(crate) fn pane_stream(
+    input_channels: &mut InputChannels,
     action: ActionKind,
     target: &TargetSelector,
     ctx: &mut ModelContext<LocalControlBridge>,
-) -> Result<async_broadcast::Receiver<Arc<Vec<u8>>>, ControlError> {
+) -> Result<BoxStream<'static, Arc<PaneStreamMessage>>, ControlError> {
     let terminal_view = target_terminal_view(action, target, ctx)?;
-    terminal_view
+    let pty_reads = terminal_view
         .read(ctx, |terminal_view, ctx| {
             terminal_view.subscribe_pty_reads(ctx)
         })
@@ -227,5 +362,19 @@ pub(crate) fn pane_stream(
                 ErrorCode::UnsupportedAction,
                 format!("{} requires a local terminal session", action.as_str()),
             )
+        })?;
+    let inputs = input_receiver(input_channels, &terminal_view, ctx);
+    let applied_op_no = input_channels
+        .get(&terminal_view.id())
+        .map_or(0, |channel| channel.applied_op_no);
+    let initial =
+        PaneStreamMessage::InputUpdated(input_state(terminal_view.as_ref(ctx), applied_op_no, ctx));
+    let pty_messages = pty_reads.map(|bytes| {
+        Arc::new(PaneStreamMessage::PtyBytesRead {
+            bytes: base64::engine::general_purpose::STANDARD.encode(bytes.as_slice()),
         })
+    });
+    Ok(stream::once(async move { Arc::new(initial) })
+        .chain(stream::select(pty_messages, inputs))
+        .boxed())
 }

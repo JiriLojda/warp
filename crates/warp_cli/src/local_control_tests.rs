@@ -373,6 +373,10 @@ fn retained_action_examples() -> Vec<(ActionKind, Vec<&'static str>)> {
             vec!["warpctrl", "pane", "write", "q"],
         ),
         (ActionKind::PaneRun, vec!["warpctrl", "pane", "run", "ls"]),
+        (
+            ActionKind::PaneUpdateInput,
+            vec!["warpctrl", "pane", "update-input", "ls", "--cursor", "1"],
+        ),
         (ActionKind::PaneStream, vec!["warpctrl", "pane", "stream"]),
         (
             ActionKind::PaneSplit,
@@ -650,6 +654,7 @@ fn parsed_action_kind(command: &ControlCommand) -> Option<ActionKind> {
             PaneCommand::Read(_) => Some(ActionKind::PaneRead),
             PaneCommand::Write(_) => Some(ActionKind::PaneWrite),
             PaneCommand::Run(_) => Some(ActionKind::PaneRun),
+            PaneCommand::UpdateInput(_) => Some(ActionKind::PaneUpdateInput),
             PaneCommand::Stream(_) => Some(ActionKind::PaneStream),
         },
         ControlCommand::Session(command) => match command {

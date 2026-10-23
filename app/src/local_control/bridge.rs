@@ -4,9 +4,11 @@
 //! before routing each supported action to an app-side handler.
 
 use ::local_control::auth::CredentialGrant;
+use ::local_control::protocol::PaneStreamMessage;
 use ::local_control::{
     Action, ActionKind, ControlError, ErrorCode, InstanceId, RequestEnvelope, ResponseEnvelope,
 };
+use futures::stream::BoxStream;
 use std::sync::Arc;
 
 use warpui::{Entity, ModelContext, SingletonEntity};
@@ -22,6 +24,7 @@ use crate::local_control::resolver::{validate_action_params, validate_action_tar
 /// WarpUI model that executes already-authenticated local-control actions.
 pub struct LocalControlBridge {
     instance_id: Option<InstanceId>,
+    input_channels: terminal_io::InputChannels,
 }
 
 impl Entity for LocalControlBridge {
@@ -32,7 +35,14 @@ impl SingletonEntity for LocalControlBridge {}
 
 impl LocalControlBridge {
     pub fn new(_ctx: &mut ModelContext<Self>) -> Self {
-        Self { instance_id: None }
+        Self {
+            instance_id: None,
+            input_channels: Default::default(),
+        }
+    }
+
+    pub(crate) fn input_channels(&self) -> &terminal_io::InputChannels {
+        &self.input_channels
     }
 
     pub(super) fn set_instance_id(&mut self, instance_id: InstanceId) {
@@ -58,13 +68,13 @@ impl LocalControlBridge {
         validate_action_target(request.action.kind, &request.target)
     }
 
-    /// Resolves a `pane.stream` request to a live receiver of the target pane's PTY output.
+    /// Resolves a `pane.stream` request to the target pane's live output and input messages.
     pub(super) fn handle_stream_request(
         &mut self,
         request: RequestEnvelope,
         grant: CredentialGrant,
         ctx: &mut ModelContext<Self>,
-    ) -> Result<async_broadcast::Receiver<Arc<Vec<u8>>>, ControlError> {
+    ) -> Result<BoxStream<'static, Arc<PaneStreamMessage>>, ControlError> {
         self.validate_request(&request, &grant, ctx)?;
         if request.action.kind != ActionKind::PaneStream {
             return Err(ControlError::new(
@@ -75,7 +85,12 @@ impl LocalControlBridge {
                 ),
             ));
         }
-        terminal_io::pane_stream(request.action.kind, &request.target, ctx)
+        terminal_io::pane_stream(
+            &mut self.input_channels,
+            request.action.kind,
+            &request.target,
+            ctx,
+        )
     }
 
     pub(super) fn handle_request(
@@ -168,15 +183,17 @@ impl LocalControlBridge {
             ActionKind::TabColorClear => {
                 metadata_config::tab_color_clear(&self.instance_id, &request.target, ctx)
             }
-            ActionKind::PaneRead | ActionKind::PaneWrite | ActionKind::PaneRun => {
-                terminal_io::handle(
-                    &self.instance_id,
-                    request.action.kind,
-                    &request.action.params,
-                    &request.target,
-                    ctx,
-                )
-            }
+            ActionKind::PaneRead
+            | ActionKind::PaneWrite
+            | ActionKind::PaneRun
+            | ActionKind::PaneUpdateInput => terminal_io::handle(
+                &self.instance_id,
+                &mut self.input_channels,
+                request.action.kind,
+                &request.action.params,
+                &request.target,
+                ctx,
+            ),
             ActionKind::PaneList => metadata::pane_list(&request.target, ctx),
             ActionKind::PaneInspect => metadata::pane_inspect(&request.target, ctx),
             ActionKind::PaneRename => metadata_config::pane_rename(

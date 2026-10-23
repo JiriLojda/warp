@@ -506,20 +506,24 @@ fn authenticate_request(
     state: &ControlServerState,
     headers: &HeaderMap,
     payload: &[u8],
-) -> Result<(RequestEnvelope, CredentialGrant), Response> {
+) -> Result<(RequestEnvelope, CredentialGrant), Box<Response>> {
     if let Err(error) = validate_loopback_headers(headers, &state.expected_host) {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(ErrorResponseEnvelope::new(error)),
-        )
-            .into_response());
+        return Err(Box::new(
+            (
+                StatusCode::FORBIDDEN,
+                Json(ErrorResponseEnvelope::new(error)),
+            )
+                .into_response(),
+        ));
     }
     if let Err(error) = ensure_feature_enabled() {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(ErrorResponseEnvelope::new(error)),
-        )
-            .into_response());
+        return Err(Box::new(
+            (
+                StatusCode::FORBIDDEN,
+                Json(ErrorResponseEnvelope::new(error)),
+            )
+                .into_response(),
+        ));
     }
     let auth_header = headers
         .get(AUTHORIZATION)
@@ -527,48 +531,56 @@ fn authenticate_request(
     let auth_token = match AuthToken::from_authorization_header(auth_header) {
         Ok(token) => token,
         Err(error) => {
-            return Err((
-                StatusCode::UNAUTHORIZED,
-                Json(ErrorResponseEnvelope::new(error)),
-            )
-                .into_response());
+            return Err(Box::new(
+                (
+                    StatusCode::UNAUTHORIZED,
+                    Json(ErrorResponseEnvelope::new(error)),
+                )
+                    .into_response(),
+            ));
         }
     };
     let grant = match state.credentials.lock() {
         Ok(mut credentials) => lookup_credential(&mut credentials, &auth_token, &state.instance_id),
         Err(_) => {
-            return Err((
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponseEnvelope::new(ControlError::new(
-                    ErrorCode::Internal,
-                    "local-control credential broker is unavailable",
-                ))),
-            )
-                .into_response());
+            return Err(Box::new(
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponseEnvelope::new(ControlError::new(
+                        ErrorCode::Internal,
+                        "local-control credential broker is unavailable",
+                    ))),
+                )
+                    .into_response(),
+            ));
         }
     };
     let grant = match grant {
         Ok(grant) => grant,
         Err(error) => {
-            return Err((
-                StatusCode::UNAUTHORIZED,
-                Json(ErrorResponseEnvelope::new(error)),
-            )
-                .into_response());
+            return Err(Box::new(
+                (
+                    StatusCode::UNAUTHORIZED,
+                    Json(ErrorResponseEnvelope::new(error)),
+                )
+                    .into_response(),
+            ));
         }
     };
     let request = match serde_json::from_slice::<RequestEnvelope>(payload) {
         Ok(request) => request,
         Err(err) => {
-            return Err((
-                StatusCode::BAD_REQUEST,
-                Json(ErrorResponseEnvelope::new(ControlError::with_details(
-                    ErrorCode::InvalidRequest,
-                    "failed to decode local-control request",
-                    err.to_string(),
-                ))),
-            )
-                .into_response());
+            return Err(Box::new(
+                (
+                    StatusCode::BAD_REQUEST,
+                    Json(ErrorResponseEnvelope::new(ControlError::with_details(
+                        ErrorCode::InvalidRequest,
+                        "failed to decode local-control request",
+                        err.to_string(),
+                    ))),
+                )
+                    .into_response(),
+            ));
         }
     };
     Ok((request, grant))
@@ -587,7 +599,7 @@ async fn handle_control_request(
 ) -> Response {
     let (request, grant) = match authenticate_request(&state, &headers, &payload) {
         Ok(authenticated) => authenticated,
-        Err(response) => return response,
+        Err(response) => return *response,
     };
     let request_id = request.request_id;
     let response = match state
@@ -611,7 +623,7 @@ async fn handle_control_request(
     (status, Json(response)).into_response()
 }
 
-/// Authenticates a `pane.stream` request and streams the pane's raw PTY output until it closes.
+/// Authenticates a `pane.stream` request and streams the pane's messages as NDJSON until it closes.
 async fn handle_stream_request(
     State(state): State<ControlServerState>,
     headers: HeaderMap,
@@ -619,15 +631,15 @@ async fn handle_stream_request(
 ) -> Response {
     let (request, grant) = match authenticate_request(&state, &headers, &payload) {
         Ok(authenticated) => authenticated,
-        Err(response) => return response,
+        Err(response) => return *response,
     };
     let request_id = request.request_id;
-    let receiver = match state
+    let messages = match state
         .bridge_spawner
         .spawn(move |bridge, ctx| bridge.handle_stream_request(request, grant, ctx))
         .await
     {
-        Ok(Ok(receiver)) => receiver,
+        Ok(Ok(messages)) => messages,
         Ok(Err(error)) => {
             return (
                 StatusCode::BAD_REQUEST,
@@ -649,12 +661,14 @@ async fn handle_stream_request(
                 .into_response();
         }
     };
-    let body = Body::from_stream(
-        receiver.map(|bytes| Ok::<_, std::convert::Infallible>(Bytes::from(bytes.to_vec()))),
-    );
+    let body = Body::from_stream(messages.map(|message| {
+        let mut line = serde_json::to_vec(message.as_ref())?;
+        line.push(b'\n');
+        Ok::<_, serde_json::Error>(Bytes::from(line))
+    }));
     (
         StatusCode::OK,
-        [(CONTENT_TYPE, "application/octet-stream")],
+        [(CONTENT_TYPE, "application/x-ndjson")],
         body,
     )
         .into_response()
