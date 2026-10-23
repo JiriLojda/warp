@@ -484,6 +484,7 @@ pub(super) fn run_pane_command(
             ActionKind::PaneRead,
             PaneReadParams {
                 max_blocks: args.max_blocks,
+                ansi: args.ansi,
             },
             output_format,
         ),

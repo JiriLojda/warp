@@ -320,13 +320,21 @@ impl AltScreen {
     }
 
     pub fn output_to_string(&self) -> String {
+        self.contents_to_string(false)
+    }
+
+    pub fn output_to_ansi_string(&self) -> String {
+        self.contents_to_string(true)
+    }
+
+    fn contents_to_string(&self, include_esc_sequences: bool) -> String {
         self.grid_handler.bounds_to_string(
             Point::new(0, 0),
             Point::new(
                 self.grid_handler.total_rows() - 1,
                 self.grid_handler.columns() - 1,
             ),
-            false, /* include_esc_sequences */
+            include_esc_sequences,
             RespectObfuscatedSecrets::No,
             false, /* force_obfuscated_secrets */
             RespectDisplayedOutput::No,

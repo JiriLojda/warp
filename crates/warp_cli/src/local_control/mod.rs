@@ -750,6 +750,10 @@ pub struct PaneReadArgs {
     /// Maximum number of most recent blocks to return.
     #[arg(long = "limit")]
     pub max_blocks: Option<u32>,
+
+    /// Keep colors and styles in the output as ANSI escape sequences.
+    #[arg(long)]
+    pub ansi: bool,
 }
 
 #[derive(Debug, Clone, Args)]

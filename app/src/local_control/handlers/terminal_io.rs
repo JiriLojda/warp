@@ -59,7 +59,7 @@ fn pane_read(
     target: &TargetSelector,
     ctx: &mut ModelContext<LocalControlBridge>,
 ) -> Result<serde_json::Value, ControlError> {
-    let PaneReadParams { max_blocks } = decode_params(params)?;
+    let PaneReadParams { max_blocks, ansi } = decode_params(params)?;
     let max_blocks = max_blocks
         .unwrap_or(DEFAULT_MAX_BLOCKS)
         .min(MAX_BLOCKS_LIMIT) as usize;
@@ -75,23 +75,32 @@ fn pane_read(
         let blocks = visible_blocks
             .iter()
             .skip(visible_blocks.len().saturating_sub(max_blocks))
-            .map(|block| block_json(block))
+            .map(|block| block_json(block, ansi))
             .collect::<Vec<_>>();
         let is_alt_screen_active = model.is_alt_screen_active();
+        let alt_screen = is_alt_screen_active.then(|| {
+            if ansi {
+                model.alt_screen().output_to_ansi_string()
+            } else {
+                model.alt_screen().output_to_string()
+            }
+        });
+        let size = model.block_list().size();
         json!({
             "action": action.as_str(),
             "alt_screen_active": is_alt_screen_active,
-            "alt_screen": is_alt_screen_active.then(|| model.alt_screen().output_to_string()),
+            "alt_screen": alt_screen,
             "blocks": blocks,
+            "size": { "columns": size.columns(), "rows": size.rows() },
         })
     }))
 }
 
-fn block_json(block: &Block) -> serde_json::Value {
+fn block_json(block: &Block, ansi: bool) -> serde_json::Value {
     json!({
         "block_id": block.id().to_string(),
         "command": block.command_to_string(),
-        "output": block.output_to_string(),
+        "output": if ansi { block.output_to_ansi_string() } else { block.output_to_string() },
         "state": block_state_name(block.state()),
         "exit_code": block.is_done().then(|| block.exit_code().value()),
         "pwd": block.pwd(),
