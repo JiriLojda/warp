@@ -602,19 +602,32 @@ async fn handle_control_request(
         Err(response) => return *response,
     };
     let request_id = request.request_id;
-    let response = match state
-        .bridge_spawner
-        .spawn(move |bridge, ctx| bridge.handle_request(request, grant, ctx))
-        .await
-    {
-        Ok(response) => response,
-        Err(_) => ResponseEnvelope::error(
-            request_id,
-            ControlError::new(
-                ErrorCode::BridgeUnavailable,
-                "local-control app bridge is unavailable",
-            ),
-        ),
+    let bridge_unavailable = || {
+        ControlError::new(
+            ErrorCode::BridgeUnavailable,
+            "local-control app bridge is unavailable",
+        )
+    };
+    let response = if request.action.kind == ActionKind::PaneComplete {
+        let pending = state
+            .bridge_spawner
+            .spawn(move |bridge, ctx| bridge.handle_complete_request(request, grant, ctx))
+            .await;
+        let result = match pending {
+            Ok(Ok(receiver)) => receiver.await.unwrap_or_else(|_| Err(bridge_unavailable())),
+            Ok(Err(error)) => Err(error),
+            Err(_) => Err(bridge_unavailable()),
+        };
+        match result {
+            Ok(data) => ResponseEnvelope::ok(request_id, data),
+            Err(error) => ResponseEnvelope::error(request_id, error),
+        }
+    } else {
+        state
+            .bridge_spawner
+            .spawn(move |bridge, ctx| bridge.handle_request(request, grant, ctx))
+            .await
+            .unwrap_or_else(|_| ResponseEnvelope::error(request_id, bridge_unavailable()))
     };
     let status = match &response.response {
         ControlResponse::Ok { .. } => StatusCode::OK,

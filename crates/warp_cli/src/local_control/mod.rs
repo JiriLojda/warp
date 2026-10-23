@@ -362,6 +362,9 @@ pub enum PaneCommand {
     /// Replace a terminal pane's input line and place its cursor.
     UpdateInput(PaneUpdateInputArgs),
 
+    /// List the completions Tab would offer for a line in a terminal pane.
+    Complete(PaneCompleteArgs),
+
     /// Stream a terminal pane's PTY output and input changes to stdout as NDJSON until the pane closes.
     Stream(TargetArgs),
 }
@@ -770,6 +773,18 @@ pub struct PaneUpdateInputArgs {
     /// Sequence number echoed back in the pane stream's input updates.
     #[arg(long, default_value_t = 0)]
     pub op_no: u64,
+
+    #[command(flatten)]
+    pub target: TargetArgs,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct PaneCompleteArgs {
+    pub text: String,
+
+    /// Cursor position in characters; defaults to the end of the text.
+    #[arg(long)]
+    pub cursor: Option<u32>,
 
     #[command(flatten)]
     pub target: TargetArgs,

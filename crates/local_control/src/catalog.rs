@@ -45,6 +45,7 @@ pub enum ActionParameterSpec {
     KeyValue,
     Namespace,
     PageQuery,
+    PaneComplete,
     PaneRead,
     PaneUpdateInput,
     Query,
@@ -70,6 +71,7 @@ pub enum ActionResultSpec {
     InstanceMetadata,
     KeybindingList,
     KeybindingMetadata,
+    PaneCompletions,
     PaneContents,
     PaneEventStream,
     SettingList,
@@ -222,6 +224,7 @@ define_action_catalog! {
         PaneRead => { name: "pane.read", status: Implemented, target: Pane, params: PaneRead, result: PaneContents },
         PaneWrite => { name: "pane.write", status: Implemented, target: Pane, params: Text, result: Acknowledgement },
         PaneRun => { name: "pane.run", status: Implemented, target: Pane, params: Text, result: Acknowledgement },
+        PaneComplete => { name: "pane.complete", status: Implemented, target: Pane, params: PaneComplete, result: PaneCompletions },
         PaneUpdateInput => { name: "pane.update_input", status: Implemented, target: Pane, params: PaneUpdateInput, result: Acknowledgement },
         PaneStream => { name: "pane.stream", status: Implemented, target: Pane, params: None, result: PaneEventStream },
     }

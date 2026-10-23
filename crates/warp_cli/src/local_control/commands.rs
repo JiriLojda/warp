@@ -3,8 +3,8 @@ use local_control::discovery::InstanceRecord;
 use local_control::protocol::{
     Action, ActionKind, ActionNameParams, BindingNameParams, BooleanValueParams, ColorValueParams,
     ControlError, DirectionParams, EmptyParams, ErrorCode, FileOpenParams, KeyParams,
-    KeyValueParams, PageQueryParams, PaneReadParams, PaneUpdateInputParams, QueryParams,
-    RenameParams, RequestEnvelope, ResizeParams, SettingListParams, TabActivateParams,
+    KeyValueParams, PageQueryParams, PaneCompleteParams, PaneReadParams, PaneUpdateInputParams,
+    QueryParams, RenameParams, RequestEnvelope, ResizeParams, SettingListParams, TabActivateParams,
     TabActivationMode, TabCloseMode, TabCloseParams, TabCreateParams, TextParams, ThemeNameParams,
 };
 use local_control::selection::select_instance;
@@ -503,6 +503,20 @@ pub(super) fn run_pane_command(
                 ActionKind::PaneUpdateInput,
                 PaneUpdateInputParams {
                     op_no: args.op_no,
+                    text: args.text,
+                    cursor,
+                },
+                output_format,
+            )
+        }
+        PaneCommand::Complete(args) => {
+            let cursor = args
+                .cursor
+                .unwrap_or_else(|| args.text.chars().count() as u32);
+            run_action_with_params(
+                args.target,
+                ActionKind::PaneComplete,
+                PaneCompleteParams {
                     text: args.text,
                     cursor,
                 },

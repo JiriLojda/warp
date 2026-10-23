@@ -152,6 +152,15 @@ pub struct PaneUpdateInputParams {
     pub cursor: u32,
 }
 
+/// Parameters for `pane.complete`: the line and cursor to complete, as Tab would in Warp's input.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PaneCompleteParams {
+    pub text: String,
+    /// In Unicode scalar values from the start of `text`.
+    pub cursor: u32,
+}
+
 /// The input editor as seen by a `pane.stream` client.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PaneInputState {

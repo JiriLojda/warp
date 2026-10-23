@@ -93,6 +93,22 @@ impl LocalControlBridge {
         )
     }
 
+    /// Starts a `pane.complete` request, whose result arrives once the completer finishes.
+    pub(super) fn handle_complete_request(
+        &mut self,
+        request: RequestEnvelope,
+        grant: CredentialGrant,
+        ctx: &mut ModelContext<Self>,
+    ) -> Result<terminal_io::PendingResult, ControlError> {
+        self.validate_request(&request, &grant, ctx)?;
+        terminal_io::pane_complete(
+            request.action.kind,
+            &request.action.params,
+            &request.target,
+            ctx,
+        )
+    }
+
     pub(super) fn handle_request(
         &mut self,
         request: RequestEnvelope,
@@ -106,6 +122,10 @@ impl LocalControlBridge {
             ActionKind::PaneStream => Err(ControlError::new(
                 ErrorCode::UnsupportedAction,
                 "pane.stream is only served by the /v1/stream endpoint",
+            )),
+            ActionKind::PaneComplete => Err(ControlError::new(
+                ErrorCode::Internal,
+                "pane.complete is resolved asynchronously by the control route",
             )),
             ActionKind::InstanceList => metadata::instance(&self.instance_id),
             ActionKind::InstanceInspect => metadata::inspect(&self.instance_id, ctx),

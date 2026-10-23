@@ -3,14 +3,19 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use ::local_control::protocol::{
-    PaneInputState, PaneReadParams, PaneStreamMessage, PaneUpdateInputParams, TargetSelector,
-    TextParams,
+    PaneCompleteParams, PaneInputState, PaneReadParams, PaneStreamMessage, PaneUpdateInputParams,
+    TargetSelector, TextParams,
 };
 use ::local_control::{ActionKind, ControlError, ErrorCode, InstanceId};
 use base64::Engine as _;
+use futures::channel::oneshot;
 use futures::stream::{self, BoxStream, StreamExt as _};
 use serde_json::json;
 use string_offset::ByteOffset;
+use warp_completer::completer::{
+    self, CompleterOptions, ExplicitTabCompletion, PathSeparators, PreparedSuggestion,
+    SuggestionResults,
+};
 use warpui::{AppContext, EntityId, ModelContext, ViewHandle};
 
 use crate::editor::Event as EditorEvent;
@@ -19,11 +24,13 @@ use crate::local_control::handlers::ack;
 use crate::local_control::handlers::app_state::validate_staged_input_text;
 use crate::local_control::resolver::{decode_params, input_target_pane_id, target_pane_group};
 use crate::terminal::TerminalView;
+use crate::terminal::input::CompleterInputs;
 use crate::terminal::model::block::{Block, BlockState};
 
 const DEFAULT_MAX_BLOCKS: u32 = 20;
 const MAX_BLOCKS_LIMIT: u32 = 500;
 const INPUT_CHANNEL_CAPACITY: usize = 64;
+const MAX_COMPLETIONS: usize = 200;
 
 /// Per-pane fan-out of input editor changes to `pane.stream` clients.
 pub(crate) struct InputChannel {
@@ -269,6 +276,116 @@ fn pane_update_input(
         });
     });
     Ok(ack(instance_id, action))
+}
+
+pub(crate) type PendingResult = oneshot::Receiver<Result<serde_json::Value, ControlError>>;
+
+/// Runs Warp's completer off the main thread and resolves with the same Tab decision Warp's input makes.
+pub(crate) fn pane_complete(
+    action: ActionKind,
+    params: &serde_json::Value,
+    target: &TargetSelector,
+    ctx: &mut ModelContext<LocalControlBridge>,
+) -> Result<PendingResult, ControlError> {
+    let PaneCompleteParams { text, cursor } = decode_params(params)?;
+    let terminal_view = target_terminal_view(action, target, ctx)?;
+    let CompleterInputs {
+        session_context,
+        env_vars,
+        path_separators: separators,
+    } = terminal_view
+        .read(ctx, |terminal_view, ctx| {
+            terminal_view.input().as_ref(ctx).completer_inputs(ctx)
+        })
+        .ok_or_else(|| {
+            ControlError::new(
+                ErrorCode::TargetStateConflict,
+                format!("{} requires a shell session at a prompt", action.as_str()),
+            )
+        })?;
+    let cursor_byte = byte_offset_of_char(&text, cursor as usize);
+    let (tx, rx) = oneshot::channel();
+    ctx.spawn(
+        async move {
+            let results = completer::suggestions(
+                &text,
+                cursor_byte,
+                env_vars.as_ref(),
+                CompleterOptions::default(),
+                &session_context,
+            )
+            .await;
+            completion_json(action, &text, cursor_byte, results, &separators)
+        },
+        move |_, result, _| {
+            let _ = tx.send(Ok(result));
+        },
+    );
+    Ok(rx)
+}
+
+fn completion_json(
+    action: ActionKind,
+    text: &str,
+    cursor_byte: usize,
+    results: Option<SuggestionResults>,
+    separators: &PathSeparators,
+) -> serde_json::Value {
+    let char_index = |byte: usize| text.get(..byte).map_or(0, |before| before.chars().count());
+    let none = json!({ "action": action.as_str(), "decision": "none", "suggestions": [] });
+    let Some(results) = results.filter(|results| !results.suggestions.is_empty()) else {
+        return none;
+    };
+    let query = results.replacement_span.slice(text);
+    let (decision, common_prefix, suggestions, span) =
+        match results.explicit_tab_completion(query, separators.all) {
+            ExplicitTabCompletion::NoAction => return none,
+            ExplicitTabCompletion::InsertSingle {
+                suggestion,
+                replacement_span,
+            } => ("insert", None, vec![suggestion], replacement_span),
+            ExplicitTabCompletion::InsertCommonPrefixAndOpen {
+                common_prefix,
+                suggestions,
+                replacement_span,
+            } => ("open", Some(common_prefix), suggestions, replacement_span),
+            ExplicitTabCompletion::Open {
+                suggestions,
+                replacement_span,
+            } => ("open", None, suggestions, replacement_span),
+        };
+    let at_end = cursor_byte == text.len();
+    json!({
+        "action": action.as_str(),
+        "decision": decision,
+        "replacement": { "start": char_index(span.start()), "end": char_index(cursor_byte) },
+        "common_prefix": common_prefix,
+        "suggestions": suggestions
+            .iter()
+            .filter(|prepared| !prepared.suggestion.is_hidden)
+            .take(MAX_COMPLETIONS)
+            .map(|prepared| suggestion_json(prepared, at_end, separators))
+            .collect::<Vec<_>>(),
+    })
+}
+
+fn suggestion_json(
+    prepared: &PreparedSuggestion,
+    at_end: bool,
+    separators: &PathSeparators,
+) -> serde_json::Value {
+    let suggestion = &prepared.suggestion;
+    let replacement = suggestion.replacement.as_str();
+    // Mirrors Warp's input, which follows a completed word with a space unless more of it can follow.
+    let adds_space =
+        at_end && !replacement.ends_with(separators.main) && !replacement.ends_with('=');
+    json!({
+        "display": suggestion.display.as_str(),
+        "insert": if adds_space { format!("{replacement} ") } else { replacement.to_owned() },
+        "description": suggestion.description,
+        "kind": suggestion.suggestion_type.to_name().to_string(),
+        "matching_indices": prepared.matching_indices,
+    })
 }
 
 fn byte_offset_of_char(text: &str, char_index: usize) -> usize {

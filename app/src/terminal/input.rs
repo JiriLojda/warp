@@ -1693,6 +1693,12 @@ impl DenyExecutionReason {
     }
 }
 
+pub(crate) struct CompleterInputs {
+    pub session_context: SessionContext,
+    pub env_vars: Option<HashMap<String, String>>,
+    pub path_separators: PathSeparators,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CanExecuteCommand {
     Yes,
@@ -13529,6 +13535,19 @@ impl Input {
         } else {
             self.editor.update(ctx, |input, ctx| input.unindent(ctx));
         }
+    }
+
+    /// Everything the completer needs to complete text for this input outside its own menu.
+    pub(crate) fn completer_inputs(&self, ctx: &AppContext) -> Option<CompleterInputs> {
+        let session_id = self.active_block_session_id()?;
+        Some(CompleterInputs {
+            session_context: self.completion_session_context(ctx)?,
+            env_vars: self
+                .sessions
+                .as_ref(ctx)
+                .get_env_vars_for_session(session_id),
+            path_separators: self.path_separators(ctx),
+        })
     }
 
     pub fn completion_session_context(&self, ctx: &AppContext) -> Option<SessionContext> {
