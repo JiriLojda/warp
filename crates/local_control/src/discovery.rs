@@ -81,6 +81,11 @@ impl ControlEndpoint {
     pub fn url(&self) -> String {
         format!("http://{}:{}/v1/control", self.host, self.port)
     }
+
+    /// Endpoint for long-lived `pane.stream` responses of raw PTY output bytes.
+    pub fn stream_url(&self) -> String {
+        format!("http://{}:{}/v1/stream", self.host, self.port)
+    }
 }
 
 /// Discovery reference to the owner-authenticated socket that issues credentials.

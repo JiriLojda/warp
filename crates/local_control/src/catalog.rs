@@ -45,6 +45,7 @@ pub enum ActionParameterSpec {
     KeyValue,
     Namespace,
     PageQuery,
+    PaneRead,
     Query,
     Rename,
     Resize,
@@ -68,6 +69,8 @@ pub enum ActionResultSpec {
     InstanceMetadata,
     KeybindingList,
     KeybindingMetadata,
+    PaneContents,
+    PtyByteStream,
     SettingList,
     SettingValue,
     SurfaceList,
@@ -215,6 +218,10 @@ define_action_catalog! {
         PaneClose => { name: "pane.close", status: Implemented, target: Pane, params: None, result: Acknowledgement },
         PaneRename => { name: "pane.rename", status: Implemented, target: Pane, params: Rename, result: Acknowledgement },
         PaneResetName => { name: "pane.reset_name", status: Implemented, target: Pane, params: None, result: Acknowledgement },
+        PaneRead => { name: "pane.read", status: Implemented, target: Pane, params: PaneRead, result: PaneContents },
+        PaneWrite => { name: "pane.write", status: Implemented, target: Pane, params: Text, result: Acknowledgement },
+        PaneRun => { name: "pane.run", status: Implemented, target: Pane, params: Text, result: Acknowledgement },
+        PaneStream => { name: "pane.stream", status: Implemented, target: Pane, params: None, result: PtyByteStream },
     }
 
     session {

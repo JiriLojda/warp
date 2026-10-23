@@ -7,10 +7,12 @@ use ::local_control::auth::CredentialGrant;
 use ::local_control::{
     Action, ActionKind, ControlError, ErrorCode, InstanceId, RequestEnvelope, ResponseEnvelope,
 };
+use std::sync::Arc;
+
 use warpui::{Entity, ModelContext, SingletonEntity};
 
 use crate::local_control::handlers::{
-    app_state, close, metadata, metadata_config, settings_surfaces,
+    app_state, close, metadata, metadata_config, settings_surfaces, terminal_io,
 };
 use crate::local_control::permissions::{
     ensure_action_allowed, ensure_feature_enabled, ensure_protocol_version,
@@ -37,37 +39,59 @@ impl LocalControlBridge {
         self.instance_id = Some(instance_id);
     }
 
+    fn validate_request(
+        &self,
+        request: &RequestEnvelope,
+        grant: &CredentialGrant,
+        ctx: &mut ModelContext<Self>,
+    ) -> Result<(), ControlError> {
+        ensure_feature_enabled()?;
+        ensure_protocol_version(request.protocol_version)?;
+        let instance_id = self.instance_id.as_ref().ok_or_else(|| {
+            ControlError::new(
+                ErrorCode::BridgeUnavailable,
+                "local-control bridge has no active instance identity",
+            )
+        })?;
+        validate_request_authority(instance_id, &request.action, grant)?;
+        ensure_action_allowed(request.action.kind, ctx)?;
+        validate_action_target(request.action.kind, &request.target)
+    }
+
+    /// Resolves a `pane.stream` request to a live receiver of the target pane's PTY output.
+    pub(super) fn handle_stream_request(
+        &mut self,
+        request: RequestEnvelope,
+        grant: CredentialGrant,
+        ctx: &mut ModelContext<Self>,
+    ) -> Result<async_broadcast::Receiver<Arc<Vec<u8>>>, ControlError> {
+        self.validate_request(&request, &grant, ctx)?;
+        if request.action.kind != ActionKind::PaneStream {
+            return Err(ControlError::new(
+                ErrorCode::UnsupportedAction,
+                format!(
+                    "{} is not served by the /v1/stream endpoint",
+                    request.action.kind.as_str()
+                ),
+            ));
+        }
+        terminal_io::pane_stream(request.action.kind, &request.target, ctx)
+    }
+
     pub(super) fn handle_request(
         &mut self,
         request: RequestEnvelope,
         grant: CredentialGrant,
         ctx: &mut ModelContext<Self>,
     ) -> ResponseEnvelope {
-        if let Err(error) = ensure_feature_enabled() {
-            return ResponseEnvelope::error(request.request_id, error);
-        }
-        if let Err(error) = ensure_protocol_version(request.protocol_version) {
-            return ResponseEnvelope::error(request.request_id, error);
-        }
-        let Some(instance_id) = &self.instance_id else {
-            return ResponseEnvelope::error(
-                request.request_id,
-                ControlError::new(
-                    ErrorCode::BridgeUnavailable,
-                    "local-control bridge has no active instance identity",
-                ),
-            );
-        };
-        if let Err(error) = validate_request_authority(instance_id, &request.action, &grant) {
-            return ResponseEnvelope::error(request.request_id, error);
-        }
-        if let Err(error) = ensure_action_allowed(request.action.kind, ctx) {
-            return ResponseEnvelope::error(request.request_id, error);
-        }
-        if let Err(error) = validate_action_target(request.action.kind, &request.target) {
+        if let Err(error) = self.validate_request(&request, &grant, ctx) {
             return ResponseEnvelope::error(request.request_id, error);
         }
         let result = match request.action.kind {
+            ActionKind::PaneStream => Err(ControlError::new(
+                ErrorCode::UnsupportedAction,
+                "pane.stream is only served by the /v1/stream endpoint",
+            )),
             ActionKind::InstanceList => metadata::instance(&self.instance_id),
             ActionKind::InstanceInspect => metadata::inspect(&self.instance_id, ctx),
             ActionKind::AppPing => metadata::ping(&self.instance_id),
@@ -143,6 +167,15 @@ impl LocalControlBridge {
             ),
             ActionKind::TabColorClear => {
                 metadata_config::tab_color_clear(&self.instance_id, &request.target, ctx)
+            }
+            ActionKind::PaneRead | ActionKind::PaneWrite | ActionKind::PaneRun => {
+                terminal_io::handle(
+                    &self.instance_id,
+                    request.action.kind,
+                    &request.action.params,
+                    &request.target,
+                    ctx,
+                )
             }
             ActionKind::PaneList => metadata::pane_list(&request.target, ctx),
             ActionKind::PaneInspect => metadata::pane_inspect(&request.target, ctx),

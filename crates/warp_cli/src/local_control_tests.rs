@@ -365,6 +365,16 @@ fn retained_action_examples() -> Vec<(ActionKind, Vec<&'static str>)> {
         (ActionKind::PaneList, vec!["warpctrl", "pane", "list"]),
         (ActionKind::PaneInspect, vec!["warpctrl", "pane", "inspect"]),
         (
+            ActionKind::PaneRead,
+            vec!["warpctrl", "pane", "read", "--limit", "5"],
+        ),
+        (
+            ActionKind::PaneWrite,
+            vec!["warpctrl", "pane", "write", "q"],
+        ),
+        (ActionKind::PaneRun, vec!["warpctrl", "pane", "run", "ls"]),
+        (ActionKind::PaneStream, vec!["warpctrl", "pane", "stream"]),
+        (
             ActionKind::PaneSplit,
             vec!["warpctrl", "pane", "split", "--direction", "right"],
         ),
@@ -637,6 +647,10 @@ fn parsed_action_kind(command: &ControlCommand) -> Option<ActionKind> {
             PaneCommand::Close(_) => Some(ActionKind::PaneClose),
             PaneCommand::Rename(_) => Some(ActionKind::PaneRename),
             PaneCommand::ResetName(_) => Some(ActionKind::PaneResetName),
+            PaneCommand::Read(_) => Some(ActionKind::PaneRead),
+            PaneCommand::Write(_) => Some(ActionKind::PaneWrite),
+            PaneCommand::Run(_) => Some(ActionKind::PaneRun),
+            PaneCommand::Stream(_) => Some(ActionKind::PaneStream),
         },
         ControlCommand::Session(command) => match command {
             SessionCommand::List(_) => Some(ActionKind::SessionList),

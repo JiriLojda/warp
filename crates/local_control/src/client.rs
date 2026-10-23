@@ -89,6 +89,63 @@ pub fn send_request(
 }
 
 /// Fails closed on platforms without a native local-control HTTP transport.
+/// Opens a `pane.stream` request and returns the response body as a byte reader.
+#[cfg(not(target_family = "wasm"))]
+pub fn open_stream(
+    instance: &InstanceRecord,
+    request: &RequestEnvelope,
+) -> Result<reqwest::blocking::Response, ControlError> {
+    instance.validate_local_control_authority()?;
+    let credential = request_credential(instance, request.action.kind)?;
+    let endpoint = instance.endpoint.as_ref().ok_or_else(|| {
+        ControlError::new(
+            ErrorCode::LocalControlDisabled,
+            "local control endpoint is disabled for this instance",
+        )
+    })?;
+    let response = reqwest::blocking::Client::builder()
+        .timeout(None)
+        .build()
+        .map_err(|err| {
+            ControlError::with_details(
+                ErrorCode::TransportUnavailable,
+                "failed to build local-control stream client",
+                err.to_string(),
+            )
+        })?
+        .post(endpoint.stream_url())
+        .header("Authorization", credential.authorization_value())
+        .json(request)
+        .send()
+        .map_err(|err| {
+            ControlError::with_details(
+                ErrorCode::TransportUnavailable,
+                "failed to open local-control stream",
+                err.to_string(),
+            )
+        })?;
+    if response.status().is_success() {
+        return Ok(response);
+    }
+    let status = response.status();
+    let text = response.text().unwrap_or_default();
+    if let Ok(envelope) = serde_json::from_str::<ErrorResponseEnvelope>(&text) {
+        return Err(envelope.error);
+    }
+    if let Ok(ResponseEnvelope {
+        response: ControlResponse::Error { error },
+        ..
+    }) = serde_json::from_str::<ResponseEnvelope>(&text)
+    {
+        return Err(error);
+    }
+    Err(ControlError::with_details(
+        ErrorCode::TransportUnavailable,
+        format!("local-control stream failed with HTTP {status}"),
+        text,
+    ))
+}
+
 #[cfg(target_family = "wasm")]
 pub fn send_request(
     instance: &InstanceRecord,

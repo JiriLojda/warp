@@ -632,7 +632,7 @@ fn input_text(
     Ok(ack(instance_id, action_kind))
 }
 
-pub(super) fn validate_staged_input_text(
+pub(in crate::local_control) fn validate_staged_input_text(
     action: ActionKind,
     text: &str,
 ) -> Result<(), ControlError> {

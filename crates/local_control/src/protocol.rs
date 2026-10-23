@@ -131,6 +131,14 @@ pub struct PageQueryParams {
     pub query: Option<String>,
 }
 
+/// Parameters for `pane.read`; `max_blocks` caps how many recent blocks are returned.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PaneReadParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_blocks: Option<u32>,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct QueryParams {

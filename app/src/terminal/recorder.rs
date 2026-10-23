@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use async_broadcast::InactiveReceiver;
+use async_broadcast::{InactiveReceiver, Receiver};
 #[cfg(feature = "local_fs")]
 use warp_errors::report_error;
 use warpui::r#async::SpawnedFutureHandle;
@@ -27,7 +27,6 @@ pub struct PtyRecorder {
     /// Whether the per-session recording toggle is enabled.
     is_per_session_recording_enabled: bool,
     /// Inactive receiver for PTY reads. Only `Some` for local TTY sessions.
-    #[cfg_attr(not(feature = "local_fs"), expect(dead_code))]
     pty_reads_rx: Option<InactiveReceiver<Arc<Vec<u8>>>>,
     /// Window ID used for showing toasts.
     window_id: WindowId,
@@ -67,6 +66,13 @@ impl PtyRecorder {
         }
 
         recorder
+    }
+
+    /// Returns a live receiver of this session's PTY output, or `None` for non-local sessions.
+    pub fn subscribe_pty_reads(&self) -> Option<Receiver<Arc<Vec<u8>>>> {
+        self.pty_reads_rx
+            .as_ref()
+            .map(InactiveReceiver::activate_cloned)
     }
 
     #[cfg(feature = "local_fs")]

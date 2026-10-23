@@ -349,6 +349,18 @@ pub enum PaneCommand {
 
     /// Reset a pane name.
     ResetName(TargetArgs),
+
+    /// Read the recent blocks and alt-screen contents of a terminal pane.
+    Read(PaneReadArgs),
+
+    /// Write raw bytes to a terminal pane's PTY, e.g. keystrokes for a running program.
+    Write(TextTargetArgs),
+
+    /// Run a command in a terminal pane, queueing it if the shell is busy.
+    Run(TextTargetArgs),
+
+    /// Stream a terminal pane's raw PTY output to stdout until the pane closes.
+    Stream(TargetArgs),
 }
 
 /// Commands that inspect local Warp sessions.
@@ -728,6 +740,16 @@ pub struct FileOpenArgs {
 
     #[command(flatten)]
     pub target: TargetArgs,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct PaneReadArgs {
+    #[command(flatten)]
+    pub target: TargetArgs,
+
+    /// Maximum number of most recent blocks to return.
+    #[arg(long = "limit")]
+    pub max_blocks: Option<u32>,
 }
 
 #[derive(Debug, Clone, Args)]
