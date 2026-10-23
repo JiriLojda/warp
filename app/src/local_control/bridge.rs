@@ -206,7 +206,8 @@ impl LocalControlBridge {
             ActionKind::PaneRead
             | ActionKind::PaneWrite
             | ActionKind::PaneRun
-            | ActionKind::PaneUpdateInput => terminal_io::handle(
+            | ActionKind::PaneUpdateInput
+            | ActionKind::PaneShare => terminal_io::handle(
                 &self.instance_id,
                 &mut self.input_channels,
                 request.action.kind,

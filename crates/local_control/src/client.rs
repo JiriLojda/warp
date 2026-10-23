@@ -88,7 +88,6 @@ pub fn send_request(
     ))
 }
 
-/// Fails closed on platforms without a native local-control HTTP transport.
 /// Opens a `pane.stream` request and returns the response body as a byte reader.
 #[cfg(not(target_family = "wasm"))]
 pub fn open_stream(
@@ -146,6 +145,7 @@ pub fn open_stream(
     ))
 }
 
+/// Fails closed on platforms without a native local-control HTTP transport.
 #[cfg(target_family = "wasm")]
 pub fn send_request(
     instance: &InstanceRecord,

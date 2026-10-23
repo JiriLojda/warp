@@ -26,6 +26,7 @@ use crate::local_control::resolver::{decode_params, input_target_pane_id, target
 use crate::terminal::TerminalView;
 use crate::terminal::input::CompleterInputs;
 use crate::terminal::model::block::{Block, BlockState};
+use crate::terminal::shared_session::{SharedSessionScrollbackType, SharedSessionSource};
 
 const DEFAULT_MAX_BLOCKS: u32 = 20;
 const MAX_BLOCKS_LIMIT: u32 = 500;
@@ -57,6 +58,7 @@ pub(crate) fn handle(
         ActionKind::PaneUpdateInput => {
             pane_update_input(instance_id, input_channels, action, params, target, ctx)
         }
+        ActionKind::PaneShare => pane_share(instance_id, action, target, ctx),
         _ => Err(ControlError::new(
             ErrorCode::UnsupportedAction,
             format!("{} is not a terminal I/O action", action.as_str()),
@@ -222,6 +224,26 @@ fn pane_run(
     let mut response = ack(instance_id, action);
     response["queued"] = json!(queued);
     Ok(response)
+}
+
+// Skips the share modal, whose login gate assumes Warp's own sharing server.
+fn pane_share(
+    instance_id: &Option<InstanceId>,
+    action: ActionKind,
+    target: &TargetSelector,
+    ctx: &mut ModelContext<LocalControlBridge>,
+) -> Result<serde_json::Value, ControlError> {
+    let terminal_view = target_terminal_view(action, target, ctx)?;
+    terminal_view.update(ctx, |terminal_view, ctx| {
+        terminal_view.attempt_to_share_session(
+            SharedSessionScrollbackType::All,
+            None,
+            SharedSessionSource::user(None),
+            true,
+            ctx,
+        );
+    });
+    Ok(ack(instance_id, action))
 }
 
 fn is_command_running(

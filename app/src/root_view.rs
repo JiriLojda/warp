@@ -1931,7 +1931,12 @@ impl RootView {
         } else {
             cfg_if! {
                 if #[cfg(target_family = "wasm")] {
-                    AuthOnboardingState::WebImport(AuthOnboardingTarget::Workspace(workspace_args.into()))
+                    // Open-source web builds have no Warp website to hand a login over.
+                    if ChannelState::channel() == warp_core::channel::Channel::Oss {
+                        AuthOnboardingState::Terminal(workspace_args.create_workspace(ctx))
+                    } else {
+                        AuthOnboardingState::WebImport(AuthOnboardingTarget::Workspace(workspace_args.into()))
+                    }
                 } else {
 
                     if FeatureFlag::ForceLogin.is_enabled() {

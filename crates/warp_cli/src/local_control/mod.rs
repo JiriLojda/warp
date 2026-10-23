@@ -367,6 +367,9 @@ pub enum PaneCommand {
 
     /// Stream a terminal pane's PTY output and input changes to stdout as NDJSON until the pane closes.
     Stream(TargetArgs),
+
+    /// Start sharing a terminal pane with the configured session-sharing server.
+    Share(TargetArgs),
 }
 
 /// Commands that inspect local Warp sessions.

@@ -479,6 +479,7 @@ pub(super) fn run_pane_command(
             output_format,
         ),
         PaneCommand::ResetName(args) => run_action(args, ActionKind::PaneResetName, output_format),
+        PaneCommand::Share(args) => run_action(args, ActionKind::PaneShare, output_format),
         PaneCommand::Read(args) => run_action_with_params(
             args.target,
             ActionKind::PaneRead,
@@ -846,6 +847,15 @@ fn run_action_with_params<T: Serialize>(
     }
 }
 
+#[cfg(target_family = "wasm")]
+fn run_pane_stream(_args: TargetArgs) -> Result<(), ControlError> {
+    Err(ControlError::new(
+        ErrorCode::TransportUnavailable,
+        "pane.stream needs the native local-control transport",
+    ))
+}
+
+#[cfg(not(target_family = "wasm"))]
 fn run_pane_stream(args: TargetArgs) -> Result<(), ControlError> {
     let selector = instance_selector(&args);
     let records = local_control::discovery::list_instances(&ChannelState::channel().to_string());

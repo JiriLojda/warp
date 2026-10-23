@@ -227,6 +227,7 @@ define_action_catalog! {
         PaneComplete => { name: "pane.complete", status: Implemented, target: Pane, params: PaneComplete, result: PaneCompletions },
         PaneUpdateInput => { name: "pane.update_input", status: Implemented, target: Pane, params: PaneUpdateInput, result: Acknowledgement },
         PaneStream => { name: "pane.stream", status: Implemented, target: Pane, params: None, result: PaneEventStream },
+        PaneShare => { name: "pane.share", status: Implemented, target: Pane, params: None, result: Acknowledgement },
     }
 
     session {

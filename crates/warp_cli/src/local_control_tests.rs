@@ -420,6 +420,7 @@ fn retained_action_examples() -> Vec<(ActionKind, Vec<&'static str>)> {
             ActionKind::PaneResetName,
             vec!["warpctrl", "pane", "reset-name"],
         ),
+        (ActionKind::PaneShare, vec!["warpctrl", "pane", "share"]),
         (ActionKind::SessionList, vec!["warpctrl", "session", "list"]),
         (
             ActionKind::SessionInspect,
@@ -661,6 +662,7 @@ fn parsed_action_kind(command: &ControlCommand) -> Option<ActionKind> {
             PaneCommand::UpdateInput(_) => Some(ActionKind::PaneUpdateInput),
             PaneCommand::Complete(_) => Some(ActionKind::PaneComplete),
             PaneCommand::Stream(_) => Some(ActionKind::PaneStream),
+            PaneCommand::Share(_) => Some(ActionKind::PaneShare),
         },
         ControlCommand::Session(command) => match command {
             SessionCommand::List(_) => Some(ActionKind::SessionList),
