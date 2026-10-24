@@ -81,6 +81,7 @@ use crate::terminal::model::iterm_image::{ITermImage, ITermImageMetadata};
 use crate::terminal::model::secrets::ObfuscateSecrets;
 use crate::terminal::model::session::SessionInfo;
 use crate::terminal::shared_session::ai_agent::encode_agent_response_event;
+use crate::terminal::shared_session::sharer::pty_filter::SharedPtyFilter;
 use crate::terminal::shared_session::{SharedSessionSource, SharedSessionStatus};
 use crate::terminal::shell::{ShellName, ShellType};
 use crate::terminal::ssh::util::{InteractiveSshCommand, SshLoginState};
@@ -506,6 +507,8 @@ pub struct TerminalModel {
     /// TODO: consider combining this with `shared_session_status` because
     /// the state can technically diverge.
     ordered_terminal_events_for_shared_session_tx: Option<Sender<OrderedTerminalEventType>>,
+    shared_pty_filter: SharedPtyFilter,
+    was_in_band_after_last_read: bool,
 
     /// A sender for write to pty events for a shared session viewer.
     ///
@@ -1121,6 +1124,8 @@ impl TerminalModel {
             is_dummy_cloud_mode_session,
             conversation_transcript_viewer_status: None,
             ordered_terminal_events_for_shared_session_tx: None,
+            shared_pty_filter: SharedPtyFilter::default(),
+            was_in_band_after_last_read: false,
             write_to_pty_events_for_shared_session_tx: None,
             is_receiving_agent_conversation_replay: false,
             notify_on_end_of_ssh_login: None,
@@ -3402,12 +3407,21 @@ impl ansi::Handler for TerminalModel {
         // the raw bytes to viewers, not the flushed frame - they'll handle the synchronized output framing themselves.
         if !input.is_synchronized_output_frame()
             && self.shared_session_status().is_sharer()
-            && let Some(tx) = &self.ordered_terminal_events_for_shared_session_tx
-            && let Err(e) = tx.try_send(OrderedTerminalEventType::PtyBytesRead {
-                bytes: bytes.to_owned(),
-            })
+            && self.ordered_terminal_events_for_shared_session_tx.is_some()
         {
-            log::warn!("Failed to send OrderedTerminalEventType::PtyBytesRead: {e}");
+            // Decided per read, not when the queued event is sent: in-band commands often finish first.
+            let is_in_band = self.block_list.is_writing_or_executing_in_band_command()
+                || self.is_receiving_in_band_command_output();
+            let bytes = self
+                .shared_pty_filter
+                .filter(bytes, is_in_band || self.was_in_band_after_last_read);
+            self.was_in_band_after_last_read = is_in_band;
+            if let Some(tx) = &self.ordered_terminal_events_for_shared_session_tx
+                && !bytes.is_empty()
+                && let Err(e) = tx.try_send(OrderedTerminalEventType::PtyBytesRead { bytes })
+            {
+                log::warn!("Failed to send OrderedTerminalEventType::PtyBytesRead: {e}");
+            }
         }
 
         delegate!(self.on_finish_byte_processing(input))

@@ -608,7 +608,10 @@ async fn handle_control_request(
             "local-control app bridge is unavailable",
         )
     };
-    let response = if request.action.kind == ActionKind::PaneComplete {
+    let response = if matches!(
+        request.action.kind,
+        ActionKind::PaneComplete | ActionKind::PaneAutosuggest
+    ) {
         let pending = state
             .bridge_spawner
             .spawn(move |bridge, ctx| bridge.handle_complete_request(request, grant, ctx))

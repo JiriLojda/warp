@@ -26,6 +26,7 @@ use crate::local_control::resolver::{decode_params, input_target_pane_id, target
 use crate::terminal::TerminalView;
 use crate::terminal::input::CompleterInputs;
 use crate::terminal::model::block::{Block, BlockState};
+use crate::terminal::shared_session::remote_completions;
 use crate::terminal::shared_session::{SharedSessionScrollbackType, SharedSessionSource};
 
 const DEFAULT_MAX_BLOCKS: u32 = 20;
@@ -346,6 +347,38 @@ pub(crate) fn pane_complete(
     Ok(rx)
 }
 
+/// Resolves with the autosuggestion Warp's input would show for `text`, as the whole suggested line.
+pub(crate) fn pane_autosuggest(
+    action: ActionKind,
+    params: &serde_json::Value,
+    target: &TargetSelector,
+    ctx: &mut ModelContext<LocalControlBridge>,
+) -> Result<PendingResult, ControlError> {
+    let TextParams { text } = decode_params(params)?;
+    let terminal_view = target_terminal_view(action, target, ctx)?;
+    let lookup = terminal_view.update(ctx, |terminal_view, ctx| {
+        terminal_view.input().update(ctx, |input, ctx| {
+            let completer_data = input.completer_data();
+            input.autosuggestion_future(text, completer_data, ctx)
+        })
+    });
+    let (tx, rx) = oneshot::channel();
+    match lookup {
+        Some((future, _)) => {
+            ctx.spawn(future, move |_, result, _| {
+                let _ = tx.send(Ok(json!({
+                    "action": action.as_str(),
+                    "suggestion": result.autosuggestion_result,
+                })));
+            });
+        }
+        None => {
+            let _ = tx.send(Ok(json!({ "action": action.as_str(), "suggestion": null })));
+        }
+    }
+    Ok(rx)
+}
+
 fn completion_json(
     action: ActionKind,
     text: &str,
@@ -358,6 +391,7 @@ fn completion_json(
     let Some(results) = results.filter(|results| !results.suggestions.is_empty()) else {
         return none;
     };
+    let raw_results = remote_completions::results_to_json(&results);
     let query = results.replacement_span.slice(text);
     let (decision, common_prefix, suggestions, span) =
         match results.explicit_tab_completion(query, separators.all) {
@@ -382,6 +416,7 @@ fn completion_json(
         "decision": decision,
         "replacement": { "start": char_index(span.start()), "end": char_index(cursor_byte) },
         "common_prefix": common_prefix,
+        "results": raw_results,
         "suggestions": suggestions
             .iter()
             .filter(|prepared| !prepared.suggestion.is_hidden)

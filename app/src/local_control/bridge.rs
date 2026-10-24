@@ -101,12 +101,12 @@ impl LocalControlBridge {
         ctx: &mut ModelContext<Self>,
     ) -> Result<terminal_io::PendingResult, ControlError> {
         self.validate_request(&request, &grant, ctx)?;
-        terminal_io::pane_complete(
-            request.action.kind,
-            &request.action.params,
-            &request.target,
-            ctx,
-        )
+        let kind = request.action.kind;
+        if kind == ActionKind::PaneAutosuggest {
+            terminal_io::pane_autosuggest(kind, &request.action.params, &request.target, ctx)
+        } else {
+            terminal_io::pane_complete(kind, &request.action.params, &request.target, ctx)
+        }
     }
 
     pub(super) fn handle_request(
@@ -123,9 +123,12 @@ impl LocalControlBridge {
                 ErrorCode::UnsupportedAction,
                 "pane.stream is only served by the /v1/stream endpoint",
             )),
-            ActionKind::PaneComplete => Err(ControlError::new(
+            ActionKind::PaneComplete | ActionKind::PaneAutosuggest => Err(ControlError::new(
                 ErrorCode::Internal,
-                "pane.complete is resolved asynchronously by the control route",
+                format!(
+                    "{} is resolved asynchronously by the control route",
+                    request.action.kind.as_str()
+                ),
             )),
             ActionKind::InstanceList => metadata::instance(&self.instance_id),
             ActionKind::InstanceInspect => metadata::inspect(&self.instance_id, ctx),

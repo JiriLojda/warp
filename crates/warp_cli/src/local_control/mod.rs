@@ -370,6 +370,9 @@ pub enum PaneCommand {
 
     /// Start sharing a terminal pane with the configured session-sharing server.
     Share(TargetArgs),
+
+    /// Print the autosuggestion Warp would show for a line in a terminal pane.
+    Autosuggest(TextTargetArgs),
 }
 
 /// Commands that inspect local Warp sessions.

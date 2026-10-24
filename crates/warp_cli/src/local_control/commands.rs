@@ -531,6 +531,12 @@ pub(super) fn run_pane_command(
             TextParams { text: args.text },
             output_format,
         ),
+        PaneCommand::Autosuggest(args) => run_action_with_params(
+            args.target,
+            ActionKind::PaneAutosuggest,
+            TextParams { text: args.text },
+            output_format,
+        ),
     }
 }
 

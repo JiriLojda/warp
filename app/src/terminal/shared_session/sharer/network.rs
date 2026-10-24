@@ -1801,8 +1801,7 @@ impl Network {
             move |network, event_type, ctx| {
                 let should_send = {
                     let model = network.model.lock();
-                    !model.is_receiving_in_band_command_output()
-                        && model.is_active_block_bootstrapped()
+                    model.is_active_block_bootstrapped()
                 };
                 if !should_send {
                     return;

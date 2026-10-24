@@ -19,6 +19,7 @@ pub mod network;
 pub mod participant_avatar_view;
 pub mod permissions_manager;
 pub mod presence_manager;
+pub(crate) mod remote_completions;
 pub mod render_util;
 pub mod replay_agent_conversations;
 pub mod role_change_modal;

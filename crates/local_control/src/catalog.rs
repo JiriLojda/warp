@@ -71,6 +71,7 @@ pub enum ActionResultSpec {
     InstanceMetadata,
     KeybindingList,
     KeybindingMetadata,
+    PaneAutosuggestion,
     PaneCompletions,
     PaneContents,
     PaneEventStream,
@@ -228,6 +229,7 @@ define_action_catalog! {
         PaneUpdateInput => { name: "pane.update_input", status: Implemented, target: Pane, params: PaneUpdateInput, result: Acknowledgement },
         PaneStream => { name: "pane.stream", status: Implemented, target: Pane, params: None, result: PaneEventStream },
         PaneShare => { name: "pane.share", status: Implemented, target: Pane, params: None, result: Acknowledgement },
+        PaneAutosuggest => { name: "pane.autosuggest", status: Implemented, target: Pane, params: Text, result: PaneAutosuggestion },
     }
 
     session {
