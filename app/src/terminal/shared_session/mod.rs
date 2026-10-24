@@ -3,6 +3,8 @@ use instant::Duration;
 use serde::{Deserialize, Serialize};
 use session_sharing_protocol::common::{Role, Scrollback, ScrollbackBlock, SessionId};
 use session_sharing_protocol::sharer::SessionSourceType;
+use url::Url;
+use warp_core::channel::WarpServerConfig;
 use warpui::keymap::ContextPredicate;
 use warpui::{AppContext, WindowId, id};
 
@@ -342,7 +344,9 @@ pub fn join_link(session_id: &SessionId) -> String {
     // because the staging web URL won't resolve to a local build.
     let use_web_url = !ChannelState::uses_staging_server() || cfg!(feature = "release_bundle");
 
-    let mut link = if use_web_url {
+    let mut link = if let Some(web_root) = self_hosted_web_root() {
+        format!("{web_root}/session/{session_id}")
+    } else if use_web_url {
         format!("{}/session/{}", ChannelState::server_root_url(), session_id,)
     } else {
         join_native_intent(session_id)
@@ -354,6 +358,33 @@ pub fn join_link(session_id: &SessionId) -> String {
     }
 
     link
+}
+
+/// A self-hosted sharing server on the open-source channel also serves the web viewer.
+fn self_hosted_web_root() -> Option<String> {
+    if ChannelState::channel() != Channel::Oss {
+        return None;
+    }
+    let sharing_url = ChannelState::session_sharing_server_url()?;
+    if Some(&sharing_url)
+        == WarpServerConfig::production()
+            .session_sharing_server_url
+            .as_ref()
+    {
+        return None;
+    }
+    web_root_of_sharing_server(&sharing_url)
+}
+
+fn web_root_of_sharing_server(sharing_url: &str) -> Option<String> {
+    let mut url = Url::parse(sharing_url).ok()?;
+    let scheme = match url.scheme() {
+        "ws" => "http",
+        "wss" => "https",
+        _ => return None,
+    };
+    url.set_scheme(scheme).ok()?;
+    Some(url.origin().ascii_serialization())
 }
 
 /// Returns the full session sharing URL given a path.
