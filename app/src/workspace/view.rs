@@ -14557,6 +14557,14 @@ impl Workspace {
             return ShowTabBar::Stacked;
         }
 
+        #[cfg(target_family = "wasm")]
+        if matches!(
+            self.get_simplified_wasm_tab_bar_content(app),
+            Some(SimplifiedWasmTabBarContent::SharedSession { .. })
+        ) {
+            return ShowTabBar::Hidden;
+        }
+
         // Always show the tab bar during HoA onboarding so that callouts
         // pointing at tabs/inbox render correctly even when the user has
         // "show tab bar on hover" enabled.
