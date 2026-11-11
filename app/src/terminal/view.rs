@@ -9950,6 +9950,13 @@ impl TerminalView {
         ctx.notify();
     }
 
+    pub(crate) fn subscribe_pty_reads(
+        &self,
+        ctx: &AppContext,
+    ) -> Option<async_broadcast::Receiver<Arc<Vec<u8>>>> {
+        self.pty_recorder.as_ref(ctx).subscribe_pty_reads()
+    }
+
     pub(crate) fn write_to_pty<B: Into<Cow<'static, [u8]>>>(
         &mut self,
         data: B,

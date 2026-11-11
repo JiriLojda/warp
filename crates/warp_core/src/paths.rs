@@ -402,6 +402,12 @@ pub fn app_group_container_path() -> Option<PathBuf> {
     static CONTAINER_PATH: LazyLock<Option<PathBuf>> = LazyLock::new(|| {
         use objc2_foundation::{NSFileManager, NSString};
 
+        // The group belongs to Warp's team; probing it from another team's build triggers a
+        // "would like to access data from other apps" prompt on every launch.
+        if ChannelState::channel() == Channel::Oss {
+            return None;
+        }
+
         let fm = NSFileManager::defaultManager();
         // Keep in sync with Entitlements.plist
         let group_id = format!("{}.dev.warp", crate::macos::APPLE_TEAM_ID);

@@ -365,6 +365,24 @@ fn retained_action_examples() -> Vec<(ActionKind, Vec<&'static str>)> {
         (ActionKind::PaneList, vec!["warpctrl", "pane", "list"]),
         (ActionKind::PaneInspect, vec!["warpctrl", "pane", "inspect"]),
         (
+            ActionKind::PaneRead,
+            vec!["warpctrl", "pane", "read", "--limit", "5"],
+        ),
+        (
+            ActionKind::PaneWrite,
+            vec!["warpctrl", "pane", "write", "q"],
+        ),
+        (ActionKind::PaneRun, vec!["warpctrl", "pane", "run", "ls"]),
+        (
+            ActionKind::PaneUpdateInput,
+            vec!["warpctrl", "pane", "update-input", "ls", "--cursor", "1"],
+        ),
+        (
+            ActionKind::PaneComplete,
+            vec!["warpctrl", "pane", "complete", "git ch"],
+        ),
+        (ActionKind::PaneStream, vec!["warpctrl", "pane", "stream"]),
+        (
             ActionKind::PaneSplit,
             vec!["warpctrl", "pane", "split", "--direction", "right"],
         ),
@@ -401,6 +419,11 @@ fn retained_action_examples() -> Vec<(ActionKind, Vec<&'static str>)> {
         (
             ActionKind::PaneResetName,
             vec!["warpctrl", "pane", "reset-name"],
+        ),
+        (ActionKind::PaneShare, vec!["warpctrl", "pane", "share"]),
+        (
+            ActionKind::PaneAutosuggest,
+            vec!["warpctrl", "pane", "autosuggest", "gi"],
         ),
         (ActionKind::SessionList, vec!["warpctrl", "session", "list"]),
         (
@@ -637,6 +660,14 @@ fn parsed_action_kind(command: &ControlCommand) -> Option<ActionKind> {
             PaneCommand::Close(_) => Some(ActionKind::PaneClose),
             PaneCommand::Rename(_) => Some(ActionKind::PaneRename),
             PaneCommand::ResetName(_) => Some(ActionKind::PaneResetName),
+            PaneCommand::Read(_) => Some(ActionKind::PaneRead),
+            PaneCommand::Write(_) => Some(ActionKind::PaneWrite),
+            PaneCommand::Run(_) => Some(ActionKind::PaneRun),
+            PaneCommand::UpdateInput(_) => Some(ActionKind::PaneUpdateInput),
+            PaneCommand::Complete(_) => Some(ActionKind::PaneComplete),
+            PaneCommand::Stream(_) => Some(ActionKind::PaneStream),
+            PaneCommand::Share(_) => Some(ActionKind::PaneShare),
+            PaneCommand::Autosuggest(_) => Some(ActionKind::PaneAutosuggest),
         },
         ControlCommand::Session(command) => match command {
             SessionCommand::List(_) => Some(ActionKind::SessionList),

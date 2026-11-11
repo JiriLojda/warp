@@ -131,6 +131,57 @@ pub struct PageQueryParams {
     pub query: Option<String>,
 }
 
+/// Parameters for `pane.read`; `ansi` keeps colors and styles as escape sequences.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PaneReadParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_blocks: Option<u32>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub ansi: bool,
+}
+
+/// Parameters for `pane.update_input`: the whole input line, replacing Warp's editor contents.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PaneUpdateInputParams {
+    /// Client-chosen sequence number, echoed back in later `InputUpdated` frames.
+    pub op_no: u64,
+    pub text: String,
+    /// Cursor position in Unicode scalar values from the start of `text`.
+    pub cursor: u32,
+}
+
+/// Parameters for `pane.complete`: the line and cursor to complete, as Tab would in Warp's input.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PaneCompleteParams {
+    pub text: String,
+    /// In Unicode scalar values from the start of `text`.
+    pub cursor: u32,
+}
+
+/// The input editor as seen by a `pane.stream` client.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PaneInputState {
+    /// The active block the input belongs to; it changes once a command runs.
+    pub buffer_id: String,
+    /// The last `pane.update_input` `op_no` applied, so clients can drop stale echoes.
+    pub op_no: u64,
+    pub text: String,
+    pub cursor: u32,
+}
+
+/// One newline-delimited JSON frame of a `pane.stream` response, named after Warp's session-sharing messages.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PaneStreamMessage {
+    PtyBytesRead {
+        /// Base64-encoded PTY output.
+        bytes: String,
+    },
+    InputUpdated(PaneInputState),
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct QueryParams {

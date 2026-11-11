@@ -349,6 +349,30 @@ pub enum PaneCommand {
 
     /// Reset a pane name.
     ResetName(TargetArgs),
+
+    /// Read the recent blocks and alt-screen contents of a terminal pane.
+    Read(PaneReadArgs),
+
+    /// Write raw bytes to a terminal pane's PTY, e.g. keystrokes for a running program.
+    Write(TextTargetArgs),
+
+    /// Run a command in a terminal pane, queueing it if the shell is busy.
+    Run(TextTargetArgs),
+
+    /// Replace a terminal pane's input line and place its cursor.
+    UpdateInput(PaneUpdateInputArgs),
+
+    /// List the completions Tab would offer for a line in a terminal pane.
+    Complete(PaneCompleteArgs),
+
+    /// Stream a terminal pane's PTY output and input changes to stdout as NDJSON until the pane closes.
+    Stream(TargetArgs),
+
+    /// Start sharing a terminal pane with the configured session-sharing server.
+    Share(TargetArgs),
+
+    /// Print the autosuggestion Warp would show for a line in a terminal pane.
+    Autosuggest(TextTargetArgs),
 }
 
 /// Commands that inspect local Warp sessions.
@@ -725,6 +749,48 @@ pub struct FileOpenArgs {
 
     #[arg(long = "new-tab")]
     pub new_tab: bool,
+
+    #[command(flatten)]
+    pub target: TargetArgs,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct PaneReadArgs {
+    #[command(flatten)]
+    pub target: TargetArgs,
+
+    /// Maximum number of most recent blocks to return.
+    #[arg(long = "limit")]
+    pub max_blocks: Option<u32>,
+
+    /// Keep colors and styles in the output as ANSI escape sequences.
+    #[arg(long)]
+    pub ansi: bool,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct PaneUpdateInputArgs {
+    pub text: String,
+
+    /// Cursor position in characters; defaults to the end of the text.
+    #[arg(long)]
+    pub cursor: Option<u32>,
+
+    /// Sequence number echoed back in the pane stream's input updates.
+    #[arg(long, default_value_t = 0)]
+    pub op_no: u64,
+
+    #[command(flatten)]
+    pub target: TargetArgs,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct PaneCompleteArgs {
+    pub text: String,
+
+    /// Cursor position in characters; defaults to the end of the text.
+    #[arg(long)]
+    pub cursor: Option<u32>,
 
     #[command(flatten)]
     pub target: TargetArgs,

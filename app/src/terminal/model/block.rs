@@ -2233,6 +2233,10 @@ impl Block {
         self.output_grid().contents_to_string(false, None)
     }
 
+    pub fn output_to_ansi_string(&self) -> String {
+        self.output_grid().contents_to_string(true, None)
+    }
+
     pub fn output_to_string_force_full_grid_contents(&self) -> String {
         self.output_grid()
             .contents_to_string_force_full_grid_contents(false, None)

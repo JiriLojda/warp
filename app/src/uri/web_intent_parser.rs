@@ -25,9 +25,13 @@ impl WebIntent {
         // Only handle URLs that point at the current channel's web server.
         let server_root = ChannelState::server_root_url();
         let server_root_url = Url::parse(&server_root)?;
-        if url.scheme() != server_root_url.scheme()
-            || url.domain() != server_root_url.domain()
-            || url.port_or_known_default() != server_root_url.port_or_known_default()
+        // Open-source web builds are served from wherever they are hosted, not from Warp's server.
+        let is_self_hosted = cfg!(target_family = "wasm")
+            && ChannelState::channel() == warp_core::channel::Channel::Oss;
+        if !is_self_hosted
+            && (url.scheme() != server_root_url.scheme()
+                || url.domain() != server_root_url.domain()
+                || url.port_or_known_default() != server_root_url.port_or_known_default())
         {
             return Err(anyhow!("Attempting to parse invalid url: {}", url));
         }

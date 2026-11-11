@@ -2259,6 +2259,12 @@ impl PaneGroup {
             .any(|pane| pane.terminal_view(ctx).id() == terminal_view_id)
     }
 
+    /// The persistent UUID a terminal pane exports to its shell as `WARP_TERMINAL_SESSION_UUID`.
+    pub fn terminal_session_uuid(&self, pane_id: PaneId) -> Option<Vec<u8>> {
+        self.downcast_pane_by_id::<TerminalPane>(pane_id)
+            .map(TerminalPane::session_uuid)
+    }
+
     /// Returns the [`PaneId`] of the terminal pane whose persistent UUID matches
     /// the given bytes, or `None` if no such pane exists in this group.
     pub fn find_terminal_pane_by_session_uuid(&self, uuid: &[u8]) -> Option<PaneId> {

@@ -78,9 +78,9 @@ use ::local_control::{
     ErrorResponseEnvelope, InstanceId, InstanceRecord, RegisteredInstance, RequestEnvelope,
     ResponseEnvelope,
 };
-use axum::body::Bytes;
+use axum::body::{Body, Bytes};
 use axum::extract::State;
-use axum::http::header::{AUTHORIZATION, HOST, ORIGIN};
+use axum::http::header::{AUTHORIZATION, CONTENT_TYPE, HOST, ORIGIN};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
@@ -88,6 +88,7 @@ use axum::{Json, Router};
 pub use bridge::LocalControlBridge;
 #[cfg(any(unix, test))]
 use chrono::Duration;
+use futures::StreamExt as _;
 use permissions::ensure_feature_enabled;
 #[cfg(any(unix, test))]
 use permissions::{ensure_action_allowed, ensure_protocol_version};
@@ -251,6 +252,7 @@ impl LocalControlServer {
         };
         let router = Router::new()
             .route("/v1/control", post(handle_control_request))
+            .route("/v1/stream", post(handle_stream_request))
             .with_state(state.clone());
         runtime.spawn(async move {
             if let Err(err) = axum::serve(listener, router).await {
@@ -499,6 +501,91 @@ async fn issue_credential(
     })
 }
 
+/// Shared header, credential, and envelope checks for every local-control HTTP route.
+fn authenticate_request(
+    state: &ControlServerState,
+    headers: &HeaderMap,
+    payload: &[u8],
+) -> Result<(RequestEnvelope, CredentialGrant), Box<Response>> {
+    if let Err(error) = validate_loopback_headers(headers, &state.expected_host) {
+        return Err(Box::new(
+            (
+                StatusCode::FORBIDDEN,
+                Json(ErrorResponseEnvelope::new(error)),
+            )
+                .into_response(),
+        ));
+    }
+    if let Err(error) = ensure_feature_enabled() {
+        return Err(Box::new(
+            (
+                StatusCode::FORBIDDEN,
+                Json(ErrorResponseEnvelope::new(error)),
+            )
+                .into_response(),
+        ));
+    }
+    let auth_header = headers
+        .get(AUTHORIZATION)
+        .and_then(|value| value.to_str().ok());
+    let auth_token = match AuthToken::from_authorization_header(auth_header) {
+        Ok(token) => token,
+        Err(error) => {
+            return Err(Box::new(
+                (
+                    StatusCode::UNAUTHORIZED,
+                    Json(ErrorResponseEnvelope::new(error)),
+                )
+                    .into_response(),
+            ));
+        }
+    };
+    let grant = match state.credentials.lock() {
+        Ok(mut credentials) => lookup_credential(&mut credentials, &auth_token, &state.instance_id),
+        Err(_) => {
+            return Err(Box::new(
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponseEnvelope::new(ControlError::new(
+                        ErrorCode::Internal,
+                        "local-control credential broker is unavailable",
+                    ))),
+                )
+                    .into_response(),
+            ));
+        }
+    };
+    let grant = match grant {
+        Ok(grant) => grant,
+        Err(error) => {
+            return Err(Box::new(
+                (
+                    StatusCode::UNAUTHORIZED,
+                    Json(ErrorResponseEnvelope::new(error)),
+                )
+                    .into_response(),
+            ));
+        }
+    };
+    let request = match serde_json::from_slice::<RequestEnvelope>(payload) {
+        Ok(request) => request,
+        Err(err) => {
+            return Err(Box::new(
+                (
+                    StatusCode::BAD_REQUEST,
+                    Json(ErrorResponseEnvelope::new(ControlError::with_details(
+                        ErrorCode::InvalidRequest,
+                        "failed to decode local-control request",
+                        err.to_string(),
+                    ))),
+                )
+                    .into_response(),
+            ));
+        }
+    };
+    Ok((request, grant))
+}
+
 /// Authenticates and hands one typed HTTP request to the app bridge.
 ///
 /// Header hardening rejects browser-origin and wrong-endpoint requests. The
@@ -510,90 +597,97 @@ async fn handle_control_request(
     headers: HeaderMap,
     payload: Bytes,
 ) -> Response {
-    if let Err(error) = validate_loopback_headers(&headers, &state.expected_host) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(ErrorResponseEnvelope::new(error)),
-        )
-            .into_response();
-    }
-    if let Err(error) = ensure_feature_enabled() {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(ErrorResponseEnvelope::new(error)),
-        )
-            .into_response();
-    }
-    let auth_header = headers
-        .get(AUTHORIZATION)
-        .and_then(|value| value.to_str().ok());
-    let auth_token = match AuthToken::from_authorization_header(auth_header) {
-        Ok(token) => token,
-        Err(error) => {
-            return (
-                StatusCode::UNAUTHORIZED,
-                Json(ErrorResponseEnvelope::new(error)),
-            )
-                .into_response();
-        }
-    };
-    let grant = match state.credentials.lock() {
-        Ok(mut credentials) => lookup_credential(&mut credentials, &auth_token, &state.instance_id),
-        Err(_) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponseEnvelope::new(ControlError::new(
-                    ErrorCode::Internal,
-                    "local-control credential broker is unavailable",
-                ))),
-            )
-                .into_response();
-        }
-    };
-    let grant = match grant {
-        Ok(grant) => grant,
-        Err(error) => {
-            return (
-                StatusCode::UNAUTHORIZED,
-                Json(ErrorResponseEnvelope::new(error)),
-            )
-                .into_response();
-        }
-    };
-    let request = match serde_json::from_slice::<RequestEnvelope>(&payload) {
-        Ok(request) => request,
-        Err(err) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(ErrorResponseEnvelope::new(ControlError::with_details(
-                    ErrorCode::InvalidRequest,
-                    "failed to decode local-control request",
-                    err.to_string(),
-                ))),
-            )
-                .into_response();
-        }
+    let (request, grant) = match authenticate_request(&state, &headers, &payload) {
+        Ok(authenticated) => authenticated,
+        Err(response) => return *response,
     };
     let request_id = request.request_id;
-    let response = match state
-        .bridge_spawner
-        .spawn(move |bridge, ctx| bridge.handle_request(request, grant, ctx))
-        .await
-    {
-        Ok(response) => response,
-        Err(_) => ResponseEnvelope::error(
-            request_id,
-            ControlError::new(
-                ErrorCode::BridgeUnavailable,
-                "local-control app bridge is unavailable",
-            ),
-        ),
+    let bridge_unavailable = || {
+        ControlError::new(
+            ErrorCode::BridgeUnavailable,
+            "local-control app bridge is unavailable",
+        )
+    };
+    let response = if matches!(
+        request.action.kind,
+        ActionKind::PaneComplete | ActionKind::PaneAutosuggest
+    ) {
+        let pending = state
+            .bridge_spawner
+            .spawn(move |bridge, ctx| bridge.handle_complete_request(request, grant, ctx))
+            .await;
+        let result = match pending {
+            Ok(Ok(receiver)) => receiver.await.unwrap_or_else(|_| Err(bridge_unavailable())),
+            Ok(Err(error)) => Err(error),
+            Err(_) => Err(bridge_unavailable()),
+        };
+        match result {
+            Ok(data) => ResponseEnvelope::ok(request_id, data),
+            Err(error) => ResponseEnvelope::error(request_id, error),
+        }
+    } else {
+        state
+            .bridge_spawner
+            .spawn(move |bridge, ctx| bridge.handle_request(request, grant, ctx))
+            .await
+            .unwrap_or_else(|_| ResponseEnvelope::error(request_id, bridge_unavailable()))
     };
     let status = match &response.response {
         ControlResponse::Ok { .. } => StatusCode::OK,
         ControlResponse::Error { .. } => StatusCode::BAD_REQUEST,
     };
     (status, Json(response)).into_response()
+}
+
+/// Authenticates a `pane.stream` request and streams the pane's messages as NDJSON until it closes.
+async fn handle_stream_request(
+    State(state): State<ControlServerState>,
+    headers: HeaderMap,
+    payload: Bytes,
+) -> Response {
+    let (request, grant) = match authenticate_request(&state, &headers, &payload) {
+        Ok(authenticated) => authenticated,
+        Err(response) => return *response,
+    };
+    let request_id = request.request_id;
+    let messages = match state
+        .bridge_spawner
+        .spawn(move |bridge, ctx| bridge.handle_stream_request(request, grant, ctx))
+        .await
+    {
+        Ok(Ok(messages)) => messages,
+        Ok(Err(error)) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ResponseEnvelope::error(request_id, error)),
+            )
+                .into_response();
+        }
+        Err(_) => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(ResponseEnvelope::error(
+                    request_id,
+                    ControlError::new(
+                        ErrorCode::BridgeUnavailable,
+                        "local-control app bridge is unavailable",
+                    ),
+                )),
+            )
+                .into_response();
+        }
+    };
+    let body = Body::from_stream(messages.map(|message| {
+        let mut line = serde_json::to_vec(message.as_ref())?;
+        line.push(b'\n');
+        Ok::<_, serde_json::Error>(Bytes::from(line))
+    }));
+    (
+        StatusCode::OK,
+        [(CONTENT_TYPE, "application/x-ndjson")],
+        body,
+    )
+        .into_response()
 }
 
 #[cfg(any(unix, test))]

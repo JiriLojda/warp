@@ -13,7 +13,13 @@ fn main() -> Result<()> {
         ChannelConfig {
             app_id: AppId::new("dev", "warp", "WarpOss"),
             logfile_name: "warp-oss.log".into(),
-            server_config: WarpServerConfig::production(),
+            // Web builds have no CLI or environment to override the URL at runtime.
+            server_config: WarpServerConfig {
+                session_sharing_server_url: option_env!("WARP_SESSION_SHARING_SERVER_URL")
+                    .map(Into::into)
+                    .or(WarpServerConfig::production().session_sharing_server_url),
+                ..WarpServerConfig::production()
+            },
             oz_config: OzConfig::production(),
             telemetry_config: None,
             crash_reporting_config: None,

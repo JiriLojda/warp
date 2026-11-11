@@ -3,9 +3,9 @@ use local_control::discovery::InstanceRecord;
 use local_control::protocol::{
     Action, ActionKind, ActionNameParams, BindingNameParams, BooleanValueParams, ColorValueParams,
     ControlError, DirectionParams, EmptyParams, ErrorCode, FileOpenParams, KeyParams,
-    KeyValueParams, PageQueryParams, QueryParams, RenameParams, RequestEnvelope, ResizeParams,
-    SettingListParams, TabActivateParams, TabActivationMode, TabCloseMode, TabCloseParams,
-    TabCreateParams, TextParams, ThemeNameParams,
+    KeyValueParams, PageQueryParams, PaneCompleteParams, PaneReadParams, PaneUpdateInputParams,
+    QueryParams, RenameParams, RequestEnvelope, ResizeParams, SettingListParams, TabActivateParams,
+    TabActivationMode, TabCloseMode, TabCloseParams, TabCreateParams, TextParams, ThemeNameParams,
 };
 use local_control::selection::select_instance;
 use serde::Serialize;
@@ -479,6 +479,64 @@ pub(super) fn run_pane_command(
             output_format,
         ),
         PaneCommand::ResetName(args) => run_action(args, ActionKind::PaneResetName, output_format),
+        PaneCommand::Share(args) => run_action(args, ActionKind::PaneShare, output_format),
+        PaneCommand::Read(args) => run_action_with_params(
+            args.target,
+            ActionKind::PaneRead,
+            PaneReadParams {
+                max_blocks: args.max_blocks,
+                ansi: args.ansi,
+            },
+            output_format,
+        ),
+        PaneCommand::Write(args) => run_action_with_params(
+            args.target,
+            ActionKind::PaneWrite,
+            TextParams { text: args.text },
+            output_format,
+        ),
+        PaneCommand::UpdateInput(args) => {
+            let cursor = args
+                .cursor
+                .unwrap_or_else(|| args.text.chars().count() as u32);
+            run_action_with_params(
+                args.target,
+                ActionKind::PaneUpdateInput,
+                PaneUpdateInputParams {
+                    op_no: args.op_no,
+                    text: args.text,
+                    cursor,
+                },
+                output_format,
+            )
+        }
+        PaneCommand::Complete(args) => {
+            let cursor = args
+                .cursor
+                .unwrap_or_else(|| args.text.chars().count() as u32);
+            run_action_with_params(
+                args.target,
+                ActionKind::PaneComplete,
+                PaneCompleteParams {
+                    text: args.text,
+                    cursor,
+                },
+                output_format,
+            )
+        }
+        PaneCommand::Stream(args) => run_pane_stream(args),
+        PaneCommand::Run(args) => run_action_with_params(
+            args.target,
+            ActionKind::PaneRun,
+            TextParams { text: args.text },
+            output_format,
+        ),
+        PaneCommand::Autosuggest(args) => run_action_with_params(
+            args.target,
+            ActionKind::PaneAutosuggest,
+            TextParams { text: args.text },
+            output_format,
+        ),
     }
 }
 
@@ -793,6 +851,33 @@ fn run_action_with_params<T: Serialize>(
             Ok(())
         }
     }
+}
+
+#[cfg(target_family = "wasm")]
+fn run_pane_stream(_args: TargetArgs) -> Result<(), ControlError> {
+    Err(ControlError::new(
+        ErrorCode::TransportUnavailable,
+        "pane.stream needs the native local-control transport",
+    ))
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn run_pane_stream(args: TargetArgs) -> Result<(), ControlError> {
+    let selector = instance_selector(&args);
+    let records = local_control::discovery::list_instances(&ChannelState::channel().to_string());
+    let target = target_selector(&args)?;
+    let instance = select_instance(&records, &selector)?;
+    let mut request = RequestEnvelope::new(Action::new(ActionKind::PaneStream));
+    request.target = target;
+    let mut response = local_control::client::open_stream(&instance, &request)?;
+    let mut stdout = std::io::stdout().lock();
+    response.copy_to(&mut stdout).map(|_| ()).map_err(|err| {
+        ControlError::with_details(
+            ErrorCode::TransportUnavailable,
+            "local-control stream ended unexpectedly",
+            err.to_string(),
+        )
+    })
 }
 
 fn parse_json_value_or_string(value: String) -> serde_json::Value {

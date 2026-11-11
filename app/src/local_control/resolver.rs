@@ -2,9 +2,9 @@
 use ::local_control::protocol::{
     ActionNameParams, ActionParameterSpec, BindingNameParams, BooleanValueParams, ColorValueParams,
     DirectionParams, EmptyParams, FileOpenParams, KeyParams, KeyValueParams, NamespaceParams,
-    PageQueryParams, PaneTarget, QueryParams, RenameParams, ResizeParams, SessionTarget,
-    TabActivateParams, TabCloseParams, TabCreateParams, TabTarget, TargetSelector, TextParams,
-    ThemeNameParams, WindowTarget,
+    PageQueryParams, PaneCompleteParams, PaneReadParams, PaneTarget, PaneUpdateInputParams,
+    QueryParams, RenameParams, ResizeParams, SessionTarget, TabActivateParams, TabCloseParams,
+    TabCreateParams, TabTarget, TargetSelector, TextParams, ThemeNameParams, WindowTarget,
 };
 use ::local_control::{ActionKind, ControlError, ErrorCode, TargetScope};
 use warpui::{AppContext, ModelContext, TypedActionView, ViewHandle, WindowId};
@@ -43,6 +43,9 @@ pub(crate) fn validate_action_params(action: &::local_control::Action) -> Result
         ActionParameterSpec::KeyValue => parse_params::<KeyValueParams>(action),
         ActionParameterSpec::Namespace => parse_params::<NamespaceParams>(action),
         ActionParameterSpec::PageQuery => parse_params::<PageQueryParams>(action),
+        ActionParameterSpec::PaneComplete => parse_params::<PaneCompleteParams>(action),
+        ActionParameterSpec::PaneRead => parse_params::<PaneReadParams>(action),
+        ActionParameterSpec::PaneUpdateInput => parse_params::<PaneUpdateInputParams>(action),
         ActionParameterSpec::Query => parse_params::<QueryParams>(action),
         ActionParameterSpec::Rename => parse_params::<RenameParams>(action),
         ActionParameterSpec::Resize => parse_params::<ResizeParams>(action),

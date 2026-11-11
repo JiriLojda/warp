@@ -1693,6 +1693,12 @@ impl DenyExecutionReason {
     }
 }
 
+pub(crate) struct CompleterInputs {
+    pub session_context: SessionContext,
+    pub env_vars: Option<HashMap<String, String>>,
+    pub path_separators: PathSeparators,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CanExecuteCommand {
     Yes,
@@ -10162,9 +10168,15 @@ impl Input {
             return;
         }
 
-        let Some(session_id) = completer_data.active_block_session_id() else {
+        #[cfg(target_family = "wasm")]
+        if self.model.lock().shared_session_status().is_viewer() {
+            self.run_remote_autosuggestion(buffer_text, ctx);
             return;
-        };
+        }
+
+        if completer_data.active_block_session_id().is_none() {
+            return;
+        }
         self.abort_latest_autosuggestion_future();
 
         if FeatureFlag::PartialNextCommandSuggestions.is_enabled() && is_next_command_enabled(ctx) {
@@ -10190,6 +10202,33 @@ impl Input {
             }
         }
 
+        let Some((future, completion_session)) =
+            self.autosuggestion_future(buffer_text, completer_data, ctx)
+        else {
+            return;
+        };
+        let abort_handle = ctx
+            .spawn_abortable(future, Self::on_autosuggestion_result, move |_, _| {
+                if let Some(session) = completion_session {
+                    session.cancel_active_commands();
+                }
+            })
+            .abort_handle();
+
+        self.set_autosuggestion_future(abort_handle);
+    }
+
+    /// Looks up an autosuggestion for `buffer_text` from history, then the completer, without showing it.
+    pub(crate) fn autosuggestion_future(
+        &mut self,
+        buffer_text: String,
+        completer_data: CompleterData,
+        ctx: &mut ViewContext<Self>,
+    ) -> Option<(
+        warpui::r#async::BoxFuture<'static, AutoSuggestionResult>,
+        Option<Arc<Session>>,
+    )> {
+        let session_id = completer_data.active_block_session_id()?;
         let completion_context = completer_data.completion_session_context(ctx);
         let completion_session = completion_context
             .as_ref()
@@ -10235,137 +10274,125 @@ impl Input {
                             .clone(),
                     )
                 });
-        let abort_handle = ctx
-            .spawn_abortable(
-                async move {
-                    #[cfg(feature = "local_fs")]
-                    // First, use rich history to find commands with a matching prefix that were run
-                    // in a similar context, taking into account the most recent block run.
-                    if let Some(conn) = conn
-                        && let Some((last_command, last_serialized_block)) =
-                            &last_user_block_completed_data
-                    {
-                        let similar_history_contexts = {
-                            let mut conn = conn.lock();
-                            NextCommandModel::get_similar_history_context(
-                                &mut conn,
-                                last_command,
-                                &last_serialized_block.pwd,
-                                last_serialized_block.exit_code,
-                                last_serialized_block.shell_host.as_ref(),
-                                0,
-                            )
-                        };
-                        if !similar_history_contexts.is_empty() {
-                            let mut history_next_command_counts = counter::Counter::<String>::new();
-                            // Find the most likely next command after a similar context, out of those that have a matching prefix and aren't ignored.
-                            for history_context in &similar_history_contexts {
-                                if history_context
-                                    .next_command
-                                    .command
-                                    .starts_with(&buffer_text)
-                                    && !ignored_suggestions
-                                        .contains(&history_context.next_command.command)
-                                {
-                                    history_next_command_counts
-                                        [&history_context.next_command.command] += 1;
-                                }
-                            }
-
-                            for (most_likely_next_command, _) in
-                                history_next_command_counts.k_most_common_ordered(5)
+        let future: warpui::r#async::BoxFuture<'static, AutoSuggestionResult> =
+            Box::pin(async move {
+                #[cfg(feature = "local_fs")]
+                // First, use rich history to find commands with a matching prefix that were run
+                // in a similar context, taking into account the most recent block run.
+                if let Some(conn) = conn
+                    && let Some((last_command, last_serialized_block)) =
+                        &last_user_block_completed_data
+                {
+                    let similar_history_contexts = {
+                        let mut conn = conn.lock();
+                        NextCommandModel::get_similar_history_context(
+                            &mut conn,
+                            last_command,
+                            &last_serialized_block.pwd,
+                            last_serialized_block.exit_code,
+                            last_serialized_block.shell_host.as_ref(),
+                            0,
+                        )
+                    };
+                    if !similar_history_contexts.is_empty() {
+                        let mut history_next_command_counts = counter::Counter::<String>::new();
+                        // Find the most likely next command after a similar context, out of those that have a matching prefix and aren't ignored.
+                        for history_context in &similar_history_contexts {
+                            if history_context
+                                .next_command
+                                .command
+                                .starts_with(&buffer_text)
+                                && !ignored_suggestions
+                                    .contains(&history_context.next_command.command)
                             {
-                                if is_command_valid(
-                                    &most_likely_next_command,
-                                    completion_context.as_ref(),
-                                    session_env_vars.as_ref(),
-                                )
-                                .await
-                                {
-                                    return AutoSuggestionResult {
-                                        buffer_text,
-                                        autosuggestion_result: Some(
-                                            most_likely_next_command.clone(),
-                                        ),
-                                    };
-                                }
+                                history_next_command_counts
+                                    [&history_context.next_command.command] += 1;
                             }
                         }
-                    }
 
-                    // If we have no suggestion from similar historical context, fallback to the most recent
-                    // command with a matching prefix run in the same pwd (if exists, otherwise just most recent command anywhere with matching prefix).
-                    for reverse_chronological_command in
-                        reverse_chronological_potential_autosuggestions.unwrap_or_default()
-                    {
-                        if !ignored_suggestions.contains(&reverse_chronological_command.command)
-                            && is_command_valid(
-                                &reverse_chronological_command.command,
+                        for (most_likely_next_command, _) in
+                            history_next_command_counts.k_most_common_ordered(5)
+                        {
+                            if is_command_valid(
+                                &most_likely_next_command,
                                 completion_context.as_ref(),
                                 session_env_vars.as_ref(),
                             )
                             .await
-                        {
-                            return AutoSuggestionResult {
-                                buffer_text,
-                                autosuggestion_result: Some(reverse_chronological_command.command),
-                            };
+                            {
+                                return AutoSuggestionResult {
+                                    buffer_text,
+                                    autosuggestion_result: Some(most_likely_next_command.clone()),
+                                };
+                            }
                         }
                     }
+                }
 
-                    // If we have no command anywhere in history with a matching prefix, fallback to the first completer result.
-                    let Some(completion_context) = completion_context else {
+                // If we have no suggestion from similar historical context, fallback to the most recent
+                // command with a matching prefix run in the same pwd (if exists, otherwise just most recent command anywhere with matching prefix).
+                for reverse_chronological_command in
+                    reverse_chronological_potential_autosuggestions.unwrap_or_default()
+                {
+                    if !ignored_suggestions.contains(&reverse_chronological_command.command)
+                        && is_command_valid(
+                            &reverse_chronological_command.command,
+                            completion_context.as_ref(),
+                            session_env_vars.as_ref(),
+                        )
+                        .await
+                    {
                         return AutoSuggestionResult {
                             buffer_text,
-                            autosuggestion_result: None,
+                            autosuggestion_result: Some(reverse_chronological_command.command),
                         };
-                    };
-                    let completion_result = completer::suggestions(
-                        buffer_text.as_str(),
-                        buffer_text.len(),
-                        session_env_vars.as_ref(),
-                        CompleterOptions {
-                            match_strategy: MatchStrategy::CaseSensitive,
-                            fallback_strategy: CompletionsFallbackStrategy::FilePaths,
-                            suggest_file_path_completions_only: false,
-                            parse_quotes_as_literals: false,
-                        },
-                        &completion_context,
-                    )
-                    .await;
+                    }
+                }
 
-                    let autosuggestion = completion_result.and_then(|result| {
-                        let replacement_span = result.replacement_span;
-                        result
-                            .suggestions
-                            .into_iter()
-                            .map(|s| {
-                                // Reproduce the final buffer text with the autosuggestion since the
-                                // completer only gives the replacement span of the suggestion.
-                                format!(
-                                    "{}{}",
-                                    &buffer_text[..replacement_span.start()],
-                                    s.replacement()
-                                )
-                            })
-                            .find(|suggestion| !ignored_suggestions.contains(suggestion))
-                    });
-
-                    AutoSuggestionResult {
+                // If we have no command anywhere in history with a matching prefix, fallback to the first completer result.
+                let Some(completion_context) = completion_context else {
+                    return AutoSuggestionResult {
                         buffer_text,
-                        autosuggestion_result: autosuggestion,
-                    }
-                },
-                Self::on_autosuggestion_result,
-                move |_, _| {
-                    if let Some(session) = completion_session {
-                        session.cancel_active_commands();
-                    }
-                },
-            )
-            .abort_handle();
+                        autosuggestion_result: None,
+                    };
+                };
+                let completion_result = completer::suggestions(
+                    buffer_text.as_str(),
+                    buffer_text.len(),
+                    session_env_vars.as_ref(),
+                    CompleterOptions {
+                        match_strategy: MatchStrategy::CaseSensitive,
+                        fallback_strategy: CompletionsFallbackStrategy::FilePaths,
+                        suggest_file_path_completions_only: false,
+                        parse_quotes_as_literals: false,
+                    },
+                    &completion_context,
+                )
+                .await;
 
-        self.set_autosuggestion_future(abort_handle);
+                let autosuggestion = completion_result.and_then(|result| {
+                    let replacement_span = result.replacement_span;
+                    result
+                        .suggestions
+                        .into_iter()
+                        .map(|s| {
+                            // Reproduce the final buffer text with the autosuggestion since the
+                            // completer only gives the replacement span of the suggestion.
+                            format!(
+                                "{}{}",
+                                &buffer_text[..replacement_span.start()],
+                                s.replacement()
+                            )
+                        })
+                        .find(|suggestion| !ignored_suggestions.contains(suggestion))
+                });
+
+                AutoSuggestionResult {
+                    buffer_text,
+                    autosuggestion_result: autosuggestion,
+                }
+            });
+        Some((future, completion_session))
     }
 
     fn is_potential_expansion(
@@ -12660,6 +12687,13 @@ impl Input {
             self.close_slash_commands_menu(ctx);
         }
 
+        // Viewers have no local session, so the sharer's completer answers instead.
+        #[cfg(target_family = "wasm")]
+        if self.model.lock().shared_session_status().is_viewer() {
+            self.run_remote_completions(completions_trigger, ctx);
+            return;
+        }
+
         let editor = self.editor.as_ref(ctx);
         let buffer_text = editor.buffer_text(ctx);
 
@@ -12699,6 +12733,100 @@ impl Input {
                 );
             }
         }
+    }
+
+    /// The URL of `action` for this shared session on the server hosting this web build.
+    #[cfg(target_family = "wasm")]
+    fn shared_session_endpoint(action: &str) -> Option<String> {
+        let page = crate::uri::browser_url_handler::parse_current_url()?;
+        let mut segments = page.path_segments()?;
+        let session_id = (segments.next() == Some("session"))
+            .then(|| segments.next())
+            .flatten()?;
+        Some(format!(
+            "{}/api/sharing/sessions/{session_id}/{action}",
+            page.origin().ascii_serialization()
+        ))
+    }
+
+    /// POSTs `body` to the hosting server; `new_external` would omit the cookie that authenticates us.
+    #[cfg(target_family = "wasm")]
+    async fn post_to_host(endpoint: String, body: serde_json::Value) -> Option<serde_json::Value> {
+        let response = http_client::Client::new()
+            .post(endpoint)
+            .json(&body)
+            .send()
+            .await
+            .ok()?;
+        response.json().await.ok()
+    }
+
+    /// Asks the sharer for the autosuggestion it would show for `buffer_text`.
+    #[cfg(target_family = "wasm")]
+    fn run_remote_autosuggestion(&mut self, buffer_text: String, ctx: &mut ViewContext<'_, Input>) {
+        let Some(endpoint) = Self::shared_session_endpoint("autosuggest") else {
+            return;
+        };
+        self.abort_latest_autosuggestion_future();
+        let abort_handle = ctx
+            .spawn_abortable(
+                async move {
+                    let value =
+                        Self::post_to_host(endpoint, serde_json::json!({ "text": buffer_text }))
+                            .await;
+                    AutoSuggestionResult {
+                        autosuggestion_result: value
+                            .and_then(|value| value["suggestion"].as_str().map(str::to_owned)),
+                        buffer_text,
+                    }
+                },
+                Self::on_autosuggestion_result,
+                |_, _| {},
+            )
+            .abort_handle();
+        self.set_autosuggestion_future(abort_handle);
+    }
+
+    /// Asks the server hosting this web build to run the completer on the sharer.
+    #[cfg(target_family = "wasm")]
+    fn run_remote_completions(
+        &mut self,
+        completions_trigger: CompletionsTrigger,
+        ctx: &mut ViewContext<'_, Input>,
+    ) {
+        let Some(endpoint) = Self::shared_session_endpoint("complete") else {
+            return;
+        };
+        let cursor_position = self.start_byte_index_of_last_selection(ctx);
+        let before_cursor_text = self.buffer_text(ctx)[..cursor_position.as_usize()].to_owned();
+        let editor_snapshot = self.editor.read(ctx, |view, ctx| view.snapshot_model(ctx));
+        if let Some(last_abort_handle) = self.completions_abort_handle.take() {
+            last_abort_handle.abort();
+        }
+        let abort_handle = ctx
+            .spawn_abortable(
+                async move {
+                    let body = serde_json::json!({
+                        "text": before_cursor_text,
+                        "cursor": before_cursor_text.chars().count(),
+                    });
+                    let value = Self::post_to_host(endpoint, body).await?;
+                    crate::terminal::shared_session::remote_completions::results_from_json(
+                        &value["results"],
+                    )
+                },
+                move |input, results, ctx| {
+                    input.handle_completion_suggestions_results(
+                        results,
+                        completions_trigger,
+                        editor_snapshot,
+                        ctx,
+                    );
+                },
+                |_, _| {},
+            )
+            .abort_handle();
+        self.completions_abort_handle = Some(abort_handle);
     }
 
     /// _Asynchronously_ generates completions by calling into the completer.
@@ -13529,6 +13657,19 @@ impl Input {
         } else {
             self.editor.update(ctx, |input, ctx| input.unindent(ctx));
         }
+    }
+
+    /// Everything the completer needs to complete text for this input outside its own menu.
+    pub(crate) fn completer_inputs(&self, ctx: &AppContext) -> Option<CompleterInputs> {
+        let session_id = self.active_block_session_id()?;
+        Some(CompleterInputs {
+            session_context: self.completion_session_context(ctx)?,
+            env_vars: self
+                .sessions
+                .as_ref(ctx)
+                .get_env_vars_for_session(session_id),
+            path_separators: self.path_separators(ctx),
+        })
     }
 
     pub fn completion_session_context(&self, ctx: &AppContext) -> Option<SessionContext> {

@@ -8,7 +8,7 @@ use warp_core::features::FeatureFlag;
 use warpui::r#async::executor::Background;
 use warpui::units::Lines;
 
-use super::{SharedSessionScrollbackType, decode_scrollback};
+use super::{SharedSessionScrollbackType, decode_scrollback, web_root_of_sharing_server};
 use crate::assert_lines_approx_eq;
 use crate::channel::ChannelState;
 use crate::terminal::TerminalModel;
@@ -425,4 +425,17 @@ fn test_loading_scrollback_in_alt_screen() {
 
     // Make sure we're in the alt screen.
     assert!(model.is_alt_screen_active());
+}
+
+#[test]
+fn web_root_of_sharing_server_keeps_only_the_origin() {
+    assert_eq!(
+        web_root_of_sharing_server("ws://127.0.0.1:4317/warp-sharing/token").as_deref(),
+        Some("http://127.0.0.1:4317")
+    );
+    assert_eq!(
+        web_root_of_sharing_server("wss://sessions.example.com/sharing").as_deref(),
+        Some("https://sessions.example.com")
+    );
+    assert_eq!(web_root_of_sharing_server("not a url"), None);
 }

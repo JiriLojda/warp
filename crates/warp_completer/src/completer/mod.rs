@@ -13,12 +13,15 @@ pub use context::{
     CommandExitStatus, CommandOutput, CompletionContext, GeneratorContext, PathCompletionContext,
     PathSeparators,
 };
-pub use describe::{Description, TopLevelCommandCaseSensitivity, describe, describe_given_token};
+pub use describe::{
+    Description, OptionCaseSensitivity, TopLevelCommandCaseSensitivity, describe,
+    describe_given_token,
+};
 pub use engine::{EngineDirEntry, EngineFileType, LocationType};
 pub use matchers::{Match, MatchStrategy, MatchType};
 pub use suggest::{
-    CompleterOptions, CompletionsFallbackStrategy, ExplicitTabCompletion, MatchedSuggestion,
-    PreparedSuggestion, Priority, Suggestion, SuggestionResults, SuggestionType,
+    CompleterOptions, CompletionsFallbackStrategy, ExplicitTabCompletion, MatchRequirement,
+    MatchedSuggestion, PreparedSuggestion, Priority, Suggestion, SuggestionResults, SuggestionType,
     SuggestionTypeName, suggestions,
 };
 
