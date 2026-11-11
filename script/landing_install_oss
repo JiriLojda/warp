@@ -1,0 +1,42 @@
+#!/bin/bash
+#
+# Builds a self-signed release WarpOss.app and installs it to ~/Applications.
+# `--deployed` prints the commit of the installed build instead.
+
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+INSTALL_DIR="$HOME/Applications"
+APP="$INSTALL_DIR/WarpOss.app"
+# Outside the bundle: writing into it would break the code signature.
+MARKER="$HOME/.local/state/warp-landing/warposs-commit"
+
+if [[ "${1:-}" == "--deployed" ]]; then
+    cat "$MARKER" 2>/dev/null || echo none
+    exit 0
+fi
+
+if pgrep -xq warp-oss; then
+    echo "WarpOss is running; quit it before installing a new build." >&2
+    exit 1
+fi
+
+# The bundle script ends by packaging a DMG with create-dmg; we install the .app directly, so stub it out.
+SHIM_DIR="$(mktemp -d)"
+trap 'rm -rf "$SHIM_DIR"' EXIT
+printf '#!/bin/sh\nexit 0\n' >"$SHIM_DIR/create-dmg"
+chmod +x "$SHIM_DIR/create-dmg"
+
+PATH="$SHIM_DIR:$PATH" ./script/bundle --channel oss --selfsign --nouniversal
+
+BUILT_APP="$(find target -maxdepth 6 -type d -path '*/release-lto/bundle/osx/WarpOss.app' | head -1)"
+if [[ -z "$BUILT_APP" ]]; then
+    echo "No WarpOss.app found under target/*/release-lto/bundle/osx" >&2
+    exit 1
+fi
+
+mkdir -p "$INSTALL_DIR" "$(dirname "$MARKER")"
+rm -rf "$APP"
+cp -R "$BUILT_APP" "$APP"
+git rev-parse HEAD >"$MARKER"
+echo "Installed $APP at $(cat "$MARKER")"

@@ -1,0 +1,169 @@
+#!/usr/bin/env python3
+"""Runs the presubmit checks that apply to the files a branch changes, minus GUI integration tests.
+
+Usage: ./script/landing_checks [base-ref] [head-ref]   (defaults: $LANDING_BASE or main, HEAD)
+Set LANDING_CHECKS_DRY_RUN=1 to print the plan without running it.
+"""
+
+from __future__ import annotations
+
+import fnmatch
+import json
+import os
+import shutil
+import subprocess
+import sys
+from functools import reduce
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+INTEGRATION_PACKAGE = "integration"
+GUI_PACKAGE = "warp"
+
+# Changing these can affect how any crate builds or lints.
+WORKSPACE_WIDE = (
+    "Cargo.toml",
+    "Cargo.lock",
+    "rust-toolchain.toml",
+    "rustfmt.toml",
+    "clippy.toml",
+    ".cargo/*",
+)
+FACTORY_FILES_INPUTS = ("resources/bundled/skills/factory-files/*", "script/test_factory_files_skill.py")
+SHELL_INPUTS = ("*.sh", "script/*")
+CLANG_INPUTS = ("crates/warpui/src/*.[chm]", "crates/warpui/src/*.cpp", "app/src/*.[chm]", "app/src/*.cpp")
+
+
+def git(*args: str) -> str:
+    return subprocess.run(["git", *args], cwd=REPO_ROOT, check=True, capture_output=True, text=True).stdout
+
+
+def changed_files(base: str, head: str) -> tuple[str, ...]:
+    return tuple(line for line in git("diff", "--name-only", f"{base}...{head}").splitlines() if line)
+
+
+def matches_any(path: str, patterns: tuple[str, ...]) -> bool:
+    return any(fnmatch.fnmatch(path, pattern) for pattern in patterns)
+
+
+def workspace_packages() -> tuple[dict, ...]:
+    metadata = subprocess.run(
+        ["cargo", "metadata", "--no-deps", "--format-version", "1"],
+        cwd=REPO_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    return tuple(json.loads(metadata)["packages"])
+
+
+def package_dir(package: dict) -> str:
+    return str(Path(package["manifest_path"]).parent.relative_to(REPO_ROOT))
+
+
+def owning_package(path: str, packages: tuple[dict, ...]) -> str | None:
+    owners = sorted(
+        (p for p in packages if package_dir(p) != "." and path.startswith(package_dir(p) + "/")),
+        key=lambda p: len(package_dir(p)),
+        reverse=True,
+    )
+    return owners[0]["name"] if owners else None
+
+
+def reverse_dependency_closure(seeds: frozenset[str], packages: tuple[dict, ...]) -> frozenset[str]:
+    names = frozenset(p["name"] for p in packages)
+    dependents = {
+        name: frozenset(
+            p["name"]
+            for p in packages
+            if any(d["name"] == name and d.get("path") for d in p["dependencies"])
+        )
+        for name in names
+    }
+
+    def expand(current: frozenset[str]) -> frozenset[str]:
+        grown = current | reduce(frozenset.union, (dependents[n] for n in current), frozenset())
+        return current if grown == current else expand(grown)
+
+    return expand(seeds)
+
+
+def has_lib_target(package: dict) -> bool:
+    return any(kind in ("lib", "rlib", "proc-macro") for t in package["targets"] for kind in t["kind"])
+
+
+def package_args(names: frozenset[str]) -> list[str]:
+    return [arg for name in sorted(names) for arg in ("-p", name)]
+
+
+def optional_tool(tool: str, command: list[str]) -> list[list[str]]:
+    if shutil.which(tool):
+        return [command]
+    print(f"note: {tool} is not installed, skipping {' '.join(command)}", file=sys.stderr)
+    return []
+
+
+def plan(files: tuple[str, ...], packages: tuple[dict, ...]) -> list[list[str]]:
+    by_name = {p["name"]: p for p in packages}
+    workspace_wide = any(matches_any(f, WORKSPACE_WIDE) for f in files)
+    touched = (
+        frozenset(by_name)
+        if workspace_wide
+        else frozenset(filter(None, (owning_package(f, packages) for f in files)))
+    )
+    linted = reverse_dependency_closure(touched, packages)
+    tested = touched - {INTEGRATION_PACKAGE}
+    doc_tested = frozenset(n for n in tested if has_lib_target(by_name[n]))
+    lints_everything = linted == frozenset(by_name)
+
+    rust = (
+        [
+            ["./script/format", "--check"],
+            ["./script/check_no_inline_test_modules"],
+            ["cargo", "clippy", *(["--workspace"] if lints_everything else package_args(linted)), "--all-targets", "--tests", "--", "-D", "warnings"],
+            # Linting alongside warp_tui unifies `warp/tui` on; the default GUI build needs its own pass.
+            *([["cargo", "clippy", "-p", GUI_PACKAGE, "--all-targets", "--tests", "--", "-D", "warnings"]] if GUI_PACKAGE in linted and len(linted) > 1 else []),
+            *(
+                [
+                    ["cargo", "nextest", "run", "--no-fail-fast", "--workspace", "-E", f"not package({INTEGRATION_PACKAGE})"],
+                    ["cargo", "test", "--doc", "--workspace"],
+                ]
+                if workspace_wide
+                else [
+                    *([["cargo", "nextest", "run", "--no-fail-fast", *package_args(tested)]] if tested else []),
+                    *([["cargo", "test", "--doc", *package_args(doc_tested)]] if doc_tested else []),
+                ]
+            ),
+        ]
+        if touched
+        else []
+    )
+    clang = (
+        optional_tool("clang-format", ["./script/run-clang-format.py", "-r", "--extensions", "c,h,cpp,m", "./crates/warpui/src/", "./app/src/"])
+        if any(matches_any(f, CLANG_INPUTS) for f in files)
+        else []
+    )
+    wgsl_files = [f for f in files if f.endswith(".wgsl") and (REPO_ROOT / f).exists()]
+    wgsl = optional_tool("wgslfmt", ["wgslfmt", "--check", *wgsl_files]) if wgsl_files else []
+    shell = optional_tool("shellcheck", ["./script/lint_shellcheck"]) if any(matches_any(f, SHELL_INPUTS) for f in files) else []
+    factory = [["./script/test_factory_files_skill.py"]] if any(matches_any(f, FACTORY_FILES_INPUTS) for f in files) else []
+    return [*rust, *clang, *wgsl, *shell, *factory]
+
+
+def main() -> int:
+    base = sys.argv[1] if len(sys.argv) > 1 else os.environ.get("LANDING_BASE", "main")
+    head = sys.argv[2] if len(sys.argv) > 2 else "HEAD"
+    files = changed_files(base, head)
+    commands = plan(files, workspace_packages())
+    print(f"{len(files)} changed file(s) since {base}; {len(commands)} check(s) to run", file=sys.stderr)
+    if os.environ.get("LANDING_CHECKS_DRY_RUN"):
+        print("\n".join(" ".join(c) for c in commands))
+        return 0
+    failed = next((c for c in commands if subprocess.run(c, cwd=REPO_ROOT).returncode != 0), None)
+    if failed:
+        print(f"FAILED: {' '.join(failed)}", file=sys.stderr)
+    return 1 if failed else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

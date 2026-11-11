@@ -1,0 +1,32 @@
+{
+  "branch": "main",
+  "remote": "origin",
+  "setup": [
+    "cargo nextest --version >/dev/null 2>&1 || cargo binstall --secure --no-confirm --no-discover-github-token cargo-nextest"
+  ],
+  // Picks the presubmit checks for the packages the branch touches (and lints their dependents); skips GUI integration tests.
+  "checks": ["./script/landing_checks main"],
+  "targets": [
+    {
+      "name": "install-warp-oss",
+      "run": "./script/landing_install_oss",
+      "when": {
+        "paths": [
+          "app/**",
+          "crates/**",
+          "resources/**",
+          "Cargo.toml",
+          "Cargo.lock",
+          "rust-toolchain.toml",
+          "script/bundle",
+          "script/macos/**"
+        ]
+      },
+      "deployed": "./script/landing_install_oss --deployed",
+      "health": "codesign --verify --deep \"$HOME/Applications/WarpOss.app\"",
+      "approval": "required",
+      // A release-lto build is long; let a burst of landings settle into one build.
+      "coalesceSeconds": 600
+    }
+  ]
+}
